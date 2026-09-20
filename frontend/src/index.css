@@ -1,0 +1,8 @@
+@import "tailwindcss";
+
+@import "tailwindcss";
+
+@theme {
+  --color-corporate-dark: #00205B;
+  --color-corporate-navy: #0A192F;
+}
