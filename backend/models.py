@@ -1,7 +1,8 @@
-from sqlalchemy import Column, Integer, String, Float, ForeignKey, DateTime
+from datetime import datetime, date
+from sqlalchemy import Column, Integer, String, Float, ForeignKey, DateTime, Date, Boolean, JSON
 from sqlalchemy.orm import relationship
-from datetime import datetime
 from database import Base
+
 
 class Usuario(Base):
     __tablename__ = "usuarios"
@@ -15,6 +16,8 @@ class Usuario(Base):
     puesto = Column(String)
 
     diagnosticos = relationship("Diagnostico", back_populates="usuario")
+    rutas = relationship("RutaAprendizaje", back_populates="usuario")
+
 
 class Pregunta(Base):
     __tablename__ = "preguntas"
@@ -27,6 +30,7 @@ class Pregunta(Base):
     opcion_3 = Column(String, nullable=False)
     opcion_4 = Column(String, nullable=False)
 
+
 class Diagnostico(Base):
     __tablename__ = "diagnosticos"
 
@@ -37,6 +41,7 @@ class Diagnostico(Base):
     fecha = Column(DateTime, default=datetime.utcnow)
 
     usuario = relationship("Usuario", back_populates="diagnosticos")
+
     
 class Curso(Base):
     __tablename__ = "cursos"
@@ -44,8 +49,19 @@ class Curso(Base):
     id = Column(Integer, primary_key=True, index=True)
     titulo = Column(String, nullable=False)
     descripcion = Column(String, nullable=True)
-    duracion = Column(String, nullable=False)  
-    nivel = Column(String, nullable=False)   
+    duracion = Column(String, nullable=False)   
+    nivel = Column(String, nullable=False)    
     categoria = Column(String, nullable=False) 
     puesto_id = Column(String, index=True, nullable=False) 
     url_contenido = Column(String, nullable=True) 
+
+    
+class RutaAprendizaje(Base):
+    __tablename__ = "rutas_aprendizaje"
+
+    id_ruta = Column(Integer, primary_key=True, index=True)
+    id_usuario = Column(Integer, ForeignKey("usuarios.id"), nullable=False)  # Apunta a usuarios.id
+    orden_secuencia_json = Column(JSON, nullable=False)
+    fecha_asignacion = Column(Date, default=date.today)  # Corregido: date.today
+
+    usuario = relationship("Usuario", back_populates="rutas")

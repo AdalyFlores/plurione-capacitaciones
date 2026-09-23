@@ -1,7 +1,13 @@
+from dotenv import load_dotenv
+
+load_dotenv()  # Carga el archivo .env al arrancar la app
+
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from services.ai_adapter import generar_ruta_aprendizaje
+
 
 from database import engine, get_db
 import models
@@ -24,7 +30,7 @@ class UserRegister(BaseModel):
     nombre: str
     email: str
     password: str
-    rol: str = "empleado"  # Valor por defecto
+    rol: str = "empleado"  
     departamento: str = ""
     puesto: str = ""
 
@@ -87,49 +93,49 @@ DB_EXAMENES = {
                 "id": 1,
                 "texto": "¿Cuál es tu nivel global de experiencia en desarrollo de software?",
                 "opciones": [
-                    "Trainee / Junior (0-1 años)",
-                    "Mid-level (2-4 años)",
-                    "Senior (5+ años)"
+                    "1. Trainee / Junior (0-1 años)",
+                    "2. Mid-level (2-4 años)",
+                    "3. Senior (5+ años)"
                 ]
             },
             {
                 "id": 2,
                 "texto": "¿Cuál es tu nivel de dominio en la creación y arquitectura de servidores Backend?",
                 "opciones": [
-                    "Básico (Scripts simples o controladores básicos)",
-                    "Intermedio (APIs REST con FastAPI, Express o Django)",
-                    "Avanzado (Patrones de diseño, Microservicios y Async I/O)",
-                    "Experto (Arquitecturas distribuidas, Event-Driven y Alta Disponibilidad)"
+                    "1. Básico (Scripts simples o controladores básicos)",
+                    "2. Intermedio (APIs REST con FastAPI, Express o Django)",
+                    "3. Avanzado (Patrones de diseño, Microservicios y Async I/O)",
+                    "4. Experto (Arquitecturas distribuidas, Event-Driven y Alta Disponibilidad)"
                 ]
             },
             {
                 "id": 3,
                 "texto": "¿Qué tan familiarizado estás con la creación, consumo y seguridad de APIs REST?",
                 "opciones": [
-                    "Solo las he consumido desde el Frontend",
-                    "He creado APIs básicas y rutas simples",
-                    "Diseño arquitecturas REST estructuradas con autenticación (JWT/OAuth)",
-                    "Manejo optimización, seguridad avanzada, rate limiting y documentación OpenAPI"
+                    "1. Solo las he consumido desde el Frontend",
+                    "2. He creado APIs básicas y rutas simples",
+                    "3. Diseño arquitecturas REST estructuradas con autenticación (JWT/OAuth)",
+                    "4. Manejo optimización, seguridad avanzada, rate limiting y documentación OpenAPI"
                 ]
             },
             {
                 "id": 4,
                 "texto": "¿Cómo ha sido tu experiencia gestionando bases de datos en proyectos reales?",
                 "opciones": [
-                    "Poca interacción / Solo teoría",
-                    "Consultas intermedias (CRUD y consultas simples)",
-                    "Modelado de tablas, relaciones (3FN) y uso de ORMs (SQLAlchemy, Prisma)",
-                    "Optimización de consultas complejas, indexación y migración de datos"
+                    "1. Poca interacción / Solo teoría",
+                    "2. Consultas intermedias (CRUD y consultas simples)",
+                    "3. Modelado de tablas, relaciones (3FN) y uso de ORMs (SQLAlchemy, Prisma)",
+                    "4. Optimización de consultas complejas, indexación y migración de datos"
                 ]
             },
             {
                 "id": 5,
                 "texto": "¿Cuál es tu flujo habitual para asegurar la calidad de tu código y entrega continua?",
                 "opciones": [
-                    "Uso básico de Git y revisiones manuales",
-                    "Manejo fluido de Git (branches, PRs) y pruebas unitarias básicas",
-                    "Escribo pruebas automatizadas (TDD) e integro pipelines de CI/CD",
-                    "Diseño estrategias globales de arquitectura, testing y entrega continua"
+                    "1. Uso básico de Git y revisiones manuales",
+                    "2. Manejo fluido de Git (branches, PRs) y pruebas unitarias básicas",
+                    "3. Escribo pruebas automatizadas (TDD) e integro pipelines de CI/CD",
+                    "4. Diseño estrategias globales de arquitectura, testing y entrega continua"
                 ]
             }
         ]
@@ -142,50 +148,50 @@ DB_EXAMENES = {
                 "id": 1,
                 "texto": "¿En qué área de marketing digital tienes mayor experiencia técnica?",
                 "opciones": [
-                    "Redes Sociales y Creación de Contenido (Orgánico)",
-                    "Publicidad Pagada (Meta Ads, Google Ads)",
-                    "SEO y Posicionamiento en Buscadores",
-                    "Estrategia Inbound, Email Marketing y Embudos completos"
+                    "1. Redes Sociales y Creación de Contenido (Orgánico)",
+                    "2. Publicidad Pagada (Meta Ads, Google Ads)",
+                    "3. SEO y Posicionamiento en Buscadores",
+                    "4. Estrategia Inbound, Email Marketing y Embudos completos"
                 ]
             },
             {
                 "id": 2,
                 "texto": "¿Cómo interpretas las métricas de rendimiento en tus campañas?",
                 "opciones": [
-                    "Reviso métricas básicas (Likes, Alcance, Clics)",
-                    "Configuro píxeles de seguimiento y mido conversiones (CPA, CTR)",
-                    "Analizo el retorno de inversión completo (ROAS, CAC, LTV) en Google Analytics",
-                    "Construyo dashboards automatizados (Looker Studio/Power BI) para decisiones estratégicas"
+                    "1. Reviso métricas básicas (Likes, Alcance, Clics)",
+                    "2. Configuro píxeles de seguimiento y mido conversiones (CPA, CTR)",
+                    "3. Analizo el retorno de inversión completo (ROAS, CAC, LTV) en Google Analytics",
+                    "4. Construyo dashboards automatizados (Looker Studio/Power BI) para decisiones estratégicas"
                 ]
             },
             {
                 "id": 3,
                 "texto": "¿Qué nivel de experiencia tienes usando plataformas de CRM o automatización?",
                 "opciones": [
-                    "Ninguno / Solo listas de correo sencillas",
-                    "Uso básico de CRM (Mailchimp, HubSpot) para envíos masivos",
-                    "Creo secuencias de nutrición de leads y segmentaciones automáticas",
-                    "Integro flujos complejos entre campañas, CRM y herramientas No-Code (Zapier/Make)"
+                    "1. Ninguno / Solo listas de correo sencillas",
+                    "2. Uso básico de CRM (Mailchimp, HubSpot) para envíos masivos",
+                    "3. Creo secuencias de nutrición de leads y segmentaciones automáticas",
+                    "4. Integro flujos complejos entre campañas, CRM y herramientas No-Code (Zapier/Make)"
                 ]
             },
             {
                 "id": 4,
                 "texto": "¿Cómo abordas la mejora continua de tus contenidos o anuncios?",
                 "opciones": [
-                    "Cambio el texto o la imagen de manera intuitiva cuando no funciona",
-                    "Realizo pruebas A/B sencillas en anuncios o páginas",
-                    "Diseño experimentos basados en hipótesis y análisis del comportamiento del usuario",
-                    "Optimizo embudos completos mediante CRO (Conversion Rate Optimization) y UX copywriting"
+                    "1. Cambio el texto o la imagen de manera intuitiva cuando no funciona",
+                    "2. Realizo pruebas A/B sencillas en anuncios o páginas",
+                    "3. Diseño experimentos basados en hipótesis y análisis del comportamiento del usuario",
+                    "4. Optimizo embudos completos mediante CRO (Conversion Rate Optimization) y UX copywriting"
                 ]
             },
             {
                 "id": 5,
                 "texto": "¿Cuál es tu experiencia administrando presupuestos de inversión publicitaria?",
                 "opciones": [
-                    "Sin experiencia en presupuestos de pauta",
-                    "Presupuestos pequeños (menos de $500 USD/mes)",
-                    "Presupuestos medianos y gestión directa de pauta escalar ($500 a $5,000 USD/mes)",
-                    "Estrategias omnicanal con presupuestos elevados y optimización de capital"
+                    "1. Sin experiencia en presupuestos de pauta",
+                    "2. Presupuestos pequeños (menos de $500 USD/mes)",
+                    "3. Presupuestos medianos y gestión directa de pauta escalar ($500 a $5,000 USD/mes)",
+                    "4. Estrategias omnicanal con presupuestos elevados y optimización de capital"
                 ]
             }
         ]
@@ -292,38 +298,53 @@ def iniciar_diagnostico(data: DiagnosticoData):
     }
 
 
+from datetime import date
+
 @app.post("/api/rutas/generar-ia")
-def generar_ruta_ia(data: GenerarRutaRequest):
-    todos_los_cursos = CATALOGO_RRHH.get(data.puesto_id, [])
+def generar_ruta_ia(payload: dict, db: Session = Depends(get_db)):
+    puesto_id_str = str(payload.get("puesto_id"))
+    usuario_id = payload.get("usuario_id")  
+
+    cursos_db = db.query(models.Curso).filter(models.Curso.puesto_id == puesto_id_str).all()
+    if not cursos_db:
+        raise HTTPException(status_code=404, detail="No se encontraron cursos para este puesto.")
+
+    catalogo_cursos = [
+        {
+            "id": c.id,
+            "titulo": c.titulo,
+            "descripcion": c.descripcion or "",
+            "duracion": c.duracion or "",
+            "nivel": c.nivel or "",
+            "categoria": c.categoria or ""
+        }
+        for c in cursos_db
+    ]
+
+    resultado_ia = generar_ruta_aprendizaje(
+        puesto_nombre="Desarrollador Backend",
+        respuestas_diagnostico=payload.get("respuestas", []),
+        cursos_disponibles=catalogo_cursos
+    )
+
     
-    if not todos_los_cursos:
-        return {"status": "ok", "ruta": []}
-
-    num_obligatorios = 3 if data.score < 70 else 2
-    num_complementarios = 1
-
-    cursos_obligatorios = [
-        {**c, "obligatorio": True, "razon_ia": "Asignado por IA: Refuerzo prioritario por brecha en diagnóstico"}
-        for c in todos_los_cursos[:num_obligatorios]
-    ]
-
-    cursos_complementarios = [
-        {**c, "obligatorio": False, "razon_ia": "Sugerido por IA: Complementario para desarrollo profesional"}
-        for c in todos_los_cursos[num_obligatorios:num_complementarios + num_obligatorios]
-    ]
-
-    ruta_final = cursos_obligatorios + cursos_complementarios
+    nueva_ruta = None
+    if usuario_id:
+        nueva_ruta = models.RutaAprendizaje(
+            id_usuario=int(usuario_id),
+            orden_secuencia_json=resultado_ia,
+            fecha_asignacion=date.today()
+        )
+        db.add(nueva_ruta)
+        db.commit()
+        db.refresh(nueva_ruta)
 
     return {
         "status": "ok",
-        "puntuacion_diagnostico": data.score,
-        "distribucion": {
-            "porcentaje_obligatorios": "70%",
-            "porcentaje_complementarios": "30%"
-        },
-        "ruta": ruta_final
+        "mensaje": "Ruta guardada en BD exitosamente" if usuario_id else "Ruta generada sin guardar",
+        "id_ruta": nueva_ruta.id_ruta if nueva_ruta else None,
+        "ruta": resultado_ia
     }
-
 
 
 @app.post("/api/diagnostico/guardar")
@@ -387,3 +408,21 @@ def eliminar_curso(curso_id: int, db: Session = Depends(get_db)):
     db.delete(curso)
     db.commit()
     return {"status": "ok", "mensaje": "Curso eliminado correctamente"}
+
+@app.get("/api/rutas/usuario/{usuario_id}")
+def obtener_ruta_usuario(usuario_id: int, db: Session = Depends(get_db)):
+    """ Obtiene la última ruta de aprendizaje guardada para un usuario """
+    ruta = db.query(models.RutaAprendizaje)\
+             .filter(models.RutaAprendizaje.id_usuario == usuario_id)\
+             .order_by(models.RutaAprendizaje.id_ruta.desc())\
+             .first()
+
+    if not ruta:
+        raise HTTPException(status_code=404, detail="El usuario no tiene una ruta de aprendizaje guardada.")
+
+    return {
+        "status": "ok",
+        "id_ruta": ruta.id_ruta,
+        "fecha_asignacion": ruta.fecha_asignacion,
+        "ruta": ruta.orden_secuencia_json
+    }
