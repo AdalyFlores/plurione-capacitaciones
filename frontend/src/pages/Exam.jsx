@@ -1,13 +1,13 @@
 import React, { useState, useEffect } from 'react';
 
-export const Exam = ({ examData, userName = "Carmen Adaly Flores Rendon", onComplete }) => {
+export const Exam = ({ examData, userName = "Empleado", userProfile = {}, onComplete }) => {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [answers, setAnswers] = useState({});
   const [submitted, setSubmitted] = useState(false);
   const [score, setScore] = useState(0);
+  const [isGeneratingPath, setIsGeneratingPath] = useState(false);
 
-  // Cronómetro de 10 minutos
-  const [timeLeft, setTimeLeft] = useState((examData?.duracion_minutos || 10) * 60);
+  const [timeLeft, setTimeLeft] = useState(180);
 
   useEffect(() => {
     if (submitted) return;
@@ -44,9 +44,9 @@ export const Exam = ({ examData, userName = "Carmen Adaly Flores Rendon", onComp
     }
   };
 
-  const handleFinalize = () => {
+  const handleFinalize = async () => {
     let totalScore = 0;
-    examData.preguntas.forEach((q) => {
+    examData?.preguntas?.forEach((q) => {
       const selectedIndex = answers[q.id];
       if (selectedIndex !== undefined) {
         const optionWeight = (selectedIndex + 1) / q.opciones.length;
@@ -54,29 +54,47 @@ export const Exam = ({ examData, userName = "Carmen Adaly Flores Rendon", onComp
       }
     });
 
-    const calculatedScore = Math.round((totalScore / totalQuestions) * 100);
+    const calculatedScore = Math.round((totalScore / (totalQuestions || 1)) * 100);
     setScore(calculatedScore);
     setSubmitted(true);
+    setIsGeneratingPath(true);
 
-    // Guardar resultado en PostgreSQL mediante FastAPI
-    fetch('http://localhost:8000/api/diagnostico/guardar', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        usuario_id: 1,
-        puesto_id: 'dev',
-        score: calculatedScore,
-      }),
-    })
-      .then((res) => res.json())
-      .then((data) => {
-        console.log('✅ Diagnóstico guardado exitosamente en BD:', data);
-      })
-      .catch((err) => {
-        console.error('❌ Error guardando el diagnóstico:', err);
+    // Extraer variables dinámicas directamente del usuario sesionado
+    const activeUserId = userProfile?.id;
+    const activePuestoId = String(userProfile?.position || userProfile?.puesto || userProfile?.puesto_id || '1');
+
+    try {
+      // 1. Guardar diagnóstico en BD
+      const resDiag = await fetch('http://localhost:8000/api/diagnostico/guardar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          usuario_id: activeUserId,
+          puesto_id: activePuestoId,
+          score: calculatedScore,
+        }),
       });
+      const dataDiag = await resDiag.json();
+      console.log('✅ Diagnóstico guardado en BD:', dataDiag);
+
+      // 2. Generar la ruta adaptativa mediante la IA de Gemini
+      const resIA = await fetch('http://localhost:8000/api/rutas/generar-ia', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          puesto_id: activePuestoId,
+          usuario_id: activeUserId,
+          respuestas: answers,
+        }),
+      });
+      const dataIA = await resIA.json();
+      console.log('🤖 Ruta de IA generada:', dataIA);
+
+    } catch (err) {
+      console.error('❌ Error guardando el diagnóstico o generando la ruta de IA:', err);
+    } finally {
+      setIsGeneratingPath(false);
+    }
   };
 
   const initialLetter = userName ? userName.charAt(0).toUpperCase() : 'U';
@@ -152,7 +170,7 @@ export const Exam = ({ examData, userName = "Carmen Adaly Flores Rendon", onComp
                     {currentQuestion.texto}
                   </h2>
 
-                  {/* Opciones en Retícula de Botones */}
+                  {/* Opciones */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
                     {currentQuestion.opciones.map((op, opIdx) => {
                       const isSelected = answers[currentQuestion.id] === opIdx;
@@ -203,9 +221,10 @@ export const Exam = ({ examData, userName = "Carmen Adaly Flores Rendon", onComp
 
                 <button
                   onClick={() => onComplete(score)}
-                  className="mt-4 bg-[#0A1326] text-white py-2.5 px-6 rounded-lg text-xs font-bold hover:bg-slate-800 transition-colors shadow-md"
+                  disabled={isGeneratingPath}
+                  className="mt-4 bg-[#0A1326] text-white py-2.5 px-6 rounded-lg text-xs font-bold hover:bg-slate-800 transition-colors shadow-md disabled:opacity-50"
                 >
-                  Ver mi Plan de Desarrollo Personalizado
+                  {isGeneratingPath ? 'Diseñando ruta con IA...' : 'Ver mi Plan de Desarrollo Personalizado'}
                 </button>
               </div>
             )}

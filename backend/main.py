@@ -1,21 +1,27 @@
+import os
+import models
+from datetime import date, datetime, timezone
+from typing import List # List sí viene de typing
+from pydantic import BaseModel # BaseModel viene de pydantic
 from dotenv import load_dotenv
 
-load_dotenv()  # Carga el archivo .env al arrancar la app
-
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from services.ai_adapter import generar_ruta_aprendizaje
 
+# Carga de variables de entorno (.env)
+load_dotenv()
 
 from database import engine, get_db
-import models
+# Importación del adaptador con la nueva librería google-genai
+from services.ai_adapter import generar_ruta_aprendizaje
 
+# Crear tablas en PostgreSQL si no existen
 models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
 
+# Configuración de CORS para conexión fluida con el Frontend (React)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -24,13 +30,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
+# --- ESQUEMAS DE PYDANTIC ---
 
 class UserRegister(BaseModel):
     nombre: str
     email: str
     password: str
-    rol: str = "empleado"  
+    rol: str = "empleado"
     departamento: str = ""
     puesto: str = ""
 
@@ -51,7 +57,7 @@ class GuardarDiagnosticoRequest(BaseModel):
     usuario_id: int
     puesto_id: str
     score: int
-    
+
 class CursoCreate(BaseModel):
     titulo: str
     descripcion: str = ""
@@ -67,7 +73,7 @@ class CursoResponse(CursoCreate):
     class Config:
         from_attributes = True
 
-
+# --- DATOS ESTÁTICOS / SIMULADOS EN MEMORIA ---
 
 DB_PERFILES = {
     "departamentos": [
@@ -198,35 +204,14 @@ DB_EXAMENES = {
     }
 }
 
-CATALOGO_RRHH = {
-    "dev": [
-        {"id": 101, "titulo": "Fundamentos de FastAPI y APIs RESTful", "duracion": "4h", "nivel": "Básico", "categoria": "APIs"},
-        {"id": 102, "titulo": "PostgreSQL, SQLAlchemy y Modelado de Datos", "duracion": "6h", "nivel": "Intermedio", "categoria": "Bases de Datos"},
-        {"id": 103, "titulo": "Seguridad Avanzada en Backend (JWT, OAuth2 y Rate Limit)", "duracion": "5h", "nivel": "Avanzado", "categoria": "APIs"},
-        {"id": 104, "titulo": "Optimización de Consultas SQL e Indexación", "duracion": "4h", "nivel": "Avanzado", "categoria": "Bases de Datos"},
-        {"id": 105, "titulo": "Testing Automatizado y Pipelines CI/CD con Git", "duracion": "5h", "nivel": "Intermedio", "categoria": "Buenas Prácticas"},
-        {"id": 106, "titulo": "Patrones de Diseño y Microservicios", "duracion": "8h", "nivel": "Avanzado", "categoria": "Arquitectura"},
-        {"id": 107, "titulo": "Habilidades Blandas para Desarrolladores Backend", "duracion": "3h", "nivel": "Básico", "categoria": "Soft Skills"},
-    ],
-    "recruiter": [
-        {"id": 201, "titulo": "Configuración de Píxeles y Medición de Conversiones", "duracion": "4h", "nivel": "Intermedio", "categoria": "Analítica"},
-        {"id": 202, "titulo": "Estrategia Avanzada de Meta Ads & Google Ads", "duracion": "6h", "nivel": "Intermedio", "categoria": "Pauta"},
-        {"id": 203, "titulo": "Google Analytics 4 (GA4) y Dashboards en Looker", "duracion": "5h", "nivel": "Avanzado", "categoria": "Analítica"},
-        {"id": 204, "titulo": "Automatización con CRM (HubSpot y Zapier)", "duracion": "5h", "nivel": "Avanzado", "categoria": "Automatización"},
-        {"id": 205, "titulo": "Diseño de Experimentos A/B y Optimización CRO", "duracion": "4h", "nivel": "Avanzado", "categoria": "Experimentos"},
-        {"id": 206, "titulo": "Copywriting y Redacción para Embudos de Venta", "duracion": "3h", "nivel": "Básico", "categoria": "Contenido"},
-    ]
-}
-
+# --- RUTAS DE AUTENTICACIÓN Y PERFILES ---
 
 @app.get("/")
 def home():
     return {"status": "API Activa", "sistema": "PluriOne Capacitaciones"}
 
-
 @app.post("/api/auth/register", status_code=status.HTTP_201_CREATED)
 def registrar_usuario(data: UserRegister, db: Session = Depends(get_db)):
-    """ Endpoint para dar de alta usuarios directamente en PostgreSQL """
     usuario_existente = db.query(models.Usuario).filter(models.Usuario.email == data.email).first()
     if usuario_existente:
         raise HTTPException(status_code=400, detail="El correo ya está registrado.")
@@ -254,10 +239,8 @@ def registrar_usuario(data: UserRegister, db: Session = Depends(get_db)):
         }
     }
 
-
 @app.post("/api/auth/login")
 def login(data: LoginData, db: Session = Depends(get_db)):
-    """ Consulta en la base de datos PostgreSQL si las credenciales son válidas """
     usuario = db.query(models.Usuario).filter(models.Usuario.email == data.email).first()
 
     if not usuario or usuario.password != data.password:
@@ -278,12 +261,9 @@ def login(data: LoginData, db: Session = Depends(get_db)):
         }
     }
 
-
-
 @app.get("/api/perfiles")
 def obtener_perfiles():
     return DB_PERFILES
-
 
 @app.post("/api/diagnostico/iniciar")
 def iniciar_diagnostico(data: DiagnosticoData):
@@ -297,61 +277,88 @@ def iniciar_diagnostico(data: DiagnosticoData):
         "examen": exam
     }
 
-
-from datetime import date
+# --- GENERACIÓN DE RUTAS E INTELIGENCIA ARTIFICIAL ---
 
 @app.post("/api/rutas/generar-ia")
 def generar_ruta_ia(payload: dict, db: Session = Depends(get_db)):
-    puesto_id_str = str(payload.get("puesto_id"))
-    usuario_id = payload.get("usuario_id")  
+    puesto_id_str = str(payload.get("puesto_id", "dev"))
+    usuario_id = payload.get("usuario_id") 
 
+    nombres_puestos = {
+        "dev": "Desarrollador Backend",
+        "recruiter": "Especialista en Marketing Digital"
+    }
+    puesto_nombre = nombres_puestos.get(puesto_id_str, puesto_id_str)
+
+    # 1. Obtener cursos desde PostgreSQL
     cursos_db = db.query(models.Curso).filter(models.Curso.puesto_id == puesto_id_str).all()
     if not cursos_db:
-        raise HTTPException(status_code=404, detail="No se encontraron cursos para este puesto.")
+        cursos_db = db.query(models.Curso).all()
 
+    # 2. Convertir lista de objetos a diccionarios
     catalogo_cursos = [
         {
             "id": c.id,
             "titulo": c.titulo,
-            "descripcion": c.descripcion or "",
-            "duracion": c.duracion or "",
-            "nivel": c.nivel or "",
-            "categoria": c.categoria or ""
+            "descripcion": getattr(c, 'descripcion', '') or "",
+            "duracion": getattr(c, 'duracion', '') or "",
+            "nivel": getattr(c, 'nivel', '') or "",
+            "categoria": getattr(c, 'categoria', '') or "",
+            "puesto_id": getattr(c, 'puesto_id', '') or ""
         }
         for c in cursos_db
     ]
 
-    resultado_ia = generar_ruta_aprendizaje(
-        puesto_nombre="Desarrollador Backend",
-        respuestas_diagnostico=payload.get("respuestas", []),
-        cursos_disponibles=catalogo_cursos
-    )
+    # 3. Invocar al motor de Gemini mediante ai_adapter
+    try:
+        resultado_ia = generar_ruta_aprendizaje(
+            puesto_nombre=puesto_nombre,
+            respuestas_diagnostico=payload.get("respuestas", []),
+            cursos_disponibles=catalogo_cursos
+        )
+    except Exception as e:
+        print(f"Error procesando endpoint de IA: {e}")
+        resultado_ia = {
+            "puesto": puesto_nombre,
+            "resumen_brechas": "No se pudo procesar con IA. Cursos asignados directamente por catálogo.",
+            "ruta": [
+                {
+                    "id_curso": c["id"],
+                    "titulo": c["titulo"],
+                    "tipo": "OBLIGATORIO",
+                    "orden_secuencia": idx + 1,
+                    "justificacion": "Asignado por catálogo por defecto",
+                    "plazo_dias": 30
+                }
+                for idx, c in enumerate(catalogo_cursos[:4])
+            ]
+        }
 
-    
+    # 4. Guardar resultado en PostgreSQL
     nueva_ruta = None
     if usuario_id:
-        nueva_ruta = models.RutaAprendizaje(
-            id_usuario=int(usuario_id),
-            orden_secuencia_json=resultado_ia,
-            fecha_asignacion=date.today()
-        )
-        db.add(nueva_ruta)
-        db.commit()
-        db.refresh(nueva_ruta)
+        try:
+            nueva_ruta = models.RutaAprendizaje(
+                id_usuario=int(usuario_id),
+                orden_secuencia_json=resultado_ia,
+                fecha_asignacion=date.today()
+            )
+            db.add(nueva_ruta)
+            db.commit()
+            db.refresh(nueva_ruta)
+        except Exception as e:
+            db.rollback()
+            print(f"Error al guardar ruta en BD: {e}")
 
     return {
         "status": "ok",
-        "mensaje": "Ruta guardada en BD exitosamente" if usuario_id else "Ruta generada sin guardar",
+        "mensaje": "Ruta generada exitosamente",
         "id_ruta": nueva_ruta.id_ruta if nueva_ruta else None,
         "ruta": resultado_ia
     }
 
-
 @app.post("/api/diagnostico/guardar")
 def guardar_diagnostico(data: GuardarDiagnosticoRequest, db: Session = Depends(get_db)):
-    """ Guarda el resultado de la evaluación diagnóstica en PostgreSQL """
-    
-    # Validar que el usuario exista
     usuario = db.query(models.Usuario).filter(models.Usuario.id == data.usuario_id).first()
     if not usuario:
         raise HTTPException(status_code=404, detail="El usuario especificado no existe.")
@@ -377,30 +384,27 @@ def guardar_diagnostico(data: GuardarDiagnosticoRequest, db: Session = Depends(g
             "fecha": nuevo_diagnostico.fecha
         }
     }
-    
+
+# --- GESTIÓN DE CURSOS (PANEL DE RRHH) ---
+
 @app.post("/api/cursos", status_code=status.HTTP_201_CREATED)
 def crear_curso(curso: CursoCreate, db: Session = Depends(get_db)):
-    """ Permite a RRHH registrar un nuevo curso en la base de datos """
     nuevo_curso = models.Curso(**curso.model_dump())
     db.add(nuevo_curso)
     db.commit()
     db.refresh(nuevo_curso)
     return {"status": "ok", "mensaje": "Curso creado exitosamente", "curso": nuevo_curso}
 
-
 @app.get("/api/cursos")
 def listar_cursos(puesto_id: str = None, db: Session = Depends(get_db)):
-    """ Obtiene todos los cursos o los filtra por puesto """
     query = db.query(models.Curso)
     if puesto_id:
         query = query.filter(models.Curso.puesto_id == puesto_id)
     cursos = query.all()
     return {"status": "ok", "total": len(cursos), "cursos": cursos}
 
-
 @app.delete("/api/cursos/{curso_id}")
 def eliminar_curso(curso_id: int, db: Session = Depends(get_db)):
-    """ Permite a RRHH eliminar un curso existente """
     curso = db.query(models.Curso).filter(models.Curso.id == curso_id).first()
     if not curso:
         raise HTTPException(status_code=404, detail="El curso no existe.")
@@ -411,7 +415,6 @@ def eliminar_curso(curso_id: int, db: Session = Depends(get_db)):
 
 @app.get("/api/rutas/usuario/{usuario_id}")
 def obtener_ruta_usuario(usuario_id: int, db: Session = Depends(get_db)):
-    """ Obtiene la última ruta de aprendizaje guardada para un usuario """
     ruta = db.query(models.RutaAprendizaje)\
              .filter(models.RutaAprendizaje.id_usuario == usuario_id)\
              .order_by(models.RutaAprendizaje.id_ruta.desc())\
@@ -425,4 +428,125 @@ def obtener_ruta_usuario(usuario_id: int, db: Session = Depends(get_db)):
         "id_ruta": ruta.id_ruta,
         "fecha_asignacion": ruta.fecha_asignacion,
         "ruta": ruta.orden_secuencia_json
+    }
+
+# --- TRACKING DE PROGRESO Y FORMATO xAPI ---
+
+def generar_xapi_statement(usuario, curso, estatus: str, calificacion: float = None):
+    verbos_xapi = {
+        "En progreso": {
+            "id": "http://adlnet.gov/expapi/verbs/initialized",
+            "display": {"es": "inicio"}
+        },
+        "Completado": {
+            "id": "http://adlnet.gov/expapi/verbs/completed",
+            "display": {"es": "completo"}
+        }
+    }
+
+    verbo = verbos_xapi.get(
+        estatus, 
+        {"id": "http://adlnet.gov/expapi/verbs/progressed", "display": {"es": "avanzo"}}
+    )
+
+    email_usuario = getattr(usuario, 'email', None) or getattr(usuario, 'correo', None) or f"usuario{usuario.id}@plurione.com"
+    nombre_usuario = getattr(usuario, 'nombre', None) or f"Usuario {usuario.id}"
+
+    statement = {
+        "actor": {
+            "mbox": f"mailto:{email_usuario}",
+            "name": nombre_usuario,
+            "objectType": "Agent"
+        },
+        "verb": verbo,
+        "object": {
+            "id": f"http://plurione.com/cursos/{curso.id}",
+            "definition": {
+                "name": {"es": curso.titulo},
+                "description": {"es": getattr(curso, 'descripcion', 'Curso de capacitacion')}
+            },
+            "objectType": "Activity"
+        },
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+
+    if calificacion is not None and estatus == "Completado":
+        statement["result"] = {
+            "score": {
+                "scaled": float(calificacion) / 100.0,
+                "raw": float(calificacion)
+            },
+            "completion": True
+        }
+
+    return statement
+
+@app.post("/api/progreso/actualizar")
+def actualizar_progreso(payload: dict, db: Session = Depends(get_db)):
+    usuario_id = payload.get("id_usuario")
+    curso_id = payload.get("id_curso")
+    nuevo_estatus = payload.get("estatus", "En progreso")
+    calificacion = payload.get("calificacion", None)
+
+    if not usuario_id or not curso_id:
+        raise HTTPException(status_code=400, detail="id_usuario e id_curso son requeridos.")
+
+    usuario = db.query(models.Usuario).filter(models.Usuario.id == usuario_id).first()
+    curso = db.query(models.Curso).filter(models.Curso.id == curso_id).first()
+
+    if not usuario or not curso:
+        raise HTTPException(status_code=404, detail="Usuario o Curso no encontrado.")
+
+    progreso = db.query(models.ProgresoCurso).filter(
+        models.ProgresoCurso.id_usuario == usuario_id,
+        models.ProgresoCurso.id_curso == curso_id
+    ).first()
+
+    if progreso:
+        progreso.estatus = nuevo_estatus
+        if calificacion is not None:
+            progreso.calificacion = calificacion
+    else:
+        progreso = models.ProgresoCurso(
+            id_usuario=usuario_id,
+            id_curso=curso_id,
+            estatus=nuevo_estatus,
+            calificacion=calificacion
+        )
+        db.add(progreso)
+
+    db.commit()
+    db.refresh(progreso)
+
+    xapi_statement = generar_xapi_statement(usuario, curso, nuevo_estatus, calificacion)
+
+    return {
+        "status": "ok",
+        "mensaje": "Progreso actualizado correctamente",
+        "progreso": {
+            "id_progreso": progreso.id_progreso,
+            "id_usuario": progreso.id_usuario,
+            "id_curso": progreso.id_curso,
+            "estatus": progreso.estatus,
+            "calificacion": progreso.calificacion
+        },
+        "xapi_statement": xapi_statement
+    }
+
+@app.get("/api/progreso/usuario/{usuario_id}")
+def obtener_progreso_usuario(usuario_id: int, db: Session = Depends(get_db)):
+    progresos = db.query(models.ProgresoCurso).filter(models.ProgresoCurso.id_usuario == usuario_id).all()
+    
+    return {
+        "status": "ok",
+        "usuario_id": usuario_id,
+        "progresos": [
+            {
+                "id_progreso": p.id_progreso,
+                "id_curso": p.id_curso,
+                "estatus": p.estatus,
+                "calificacion": p.calificacion
+            }
+            for p in progresos
+        ]
     }

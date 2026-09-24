@@ -65,3 +65,17 @@ class RutaAprendizaje(Base):
     fecha_asignacion = Column(Date, default=date.today)  # Corregido: date.today
 
     usuario = relationship("Usuario", back_populates="rutas")
+    
+    
+class ProgresoCurso(Base):
+    __tablename__ = "progreso_cursos"
+
+    id_progreso = Column(Integer, primary_key=True, index=True)
+    id_usuario = Column(Integer, ForeignKey("usuarios.id"), nullable=False)
+    id_curso = Column(Integer, ForeignKey("cursos.id"), nullable=False)
+    estatus = Column(String, default="Pendiente")  # 'Pendiente', 'En progreso', 'Completado'
+    calificacion = Column(Float, nullable=True)
+
+    # Relaciones
+    usuario = relationship("Usuario")
+    curso = relationship("Curso")
