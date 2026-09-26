@@ -1,19 +1,19 @@
 import os
-import models
 from datetime import date, datetime, timezone
-from typing import List # List sí viene de typing
-from pydantic import BaseModel # BaseModel viene de pydantic
+from typing import List
+from pydantic import BaseModel
 from dotenv import load_dotenv
 
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-
+from sqlalchemy import text
+from models import Diagnostico, Base  # Asegúrate de importar Diagnostico desde tu archivo de modelos
 # Carga de variables de entorno (.env)
 load_dotenv()
 
+import models
 from database import engine, get_db
-# Importación del adaptador con la nueva librería google-genai
 from services.ai_adapter import generar_ruta_aprendizaje
 
 # Crear tablas en PostgreSQL si no existen
@@ -21,7 +21,7 @@ models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
 
-# Configuración de CORS para conexión fluida con el Frontend (React)
+# Configuración de CORS para conexión con el Frontend (React)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -300,11 +300,13 @@ def generar_ruta_ia(payload: dict, db: Session = Depends(get_db)):
         {
             "id": c.id,
             "titulo": c.titulo,
-            "descripcion": getattr(c, 'descripcion', '') or "",
-            "duracion": getattr(c, 'duracion', '') or "",
-            "nivel": getattr(c, 'nivel', '') or "",
-            "categoria": getattr(c, 'categoria', '') or "",
-            "puesto_id": getattr(c, 'puesto_id', '') or ""
+            "descripcion": getattr(c, 'descripcion', '') or "Sin descripción disponible.",
+            "duracion": getattr(c, 'duracion', '') or "No especificada",
+            "nivel": getattr(c, 'nivel', '') or "General",
+            "categoria": getattr(c, 'categoria', '') or "Capacitación",
+            "puesto_id": getattr(c, 'puesto_id', '') or "",
+            "url_contenido": getattr(c, 'url_contenido', '') or "#",
+            "tipo_contenido": getattr(c, 'tipo_contenido', '') or "Recurso"
         }
         for c in cursos_db
     ]
@@ -334,7 +336,7 @@ def generar_ruta_ia(payload: dict, db: Session = Depends(get_db)):
             ]
         }
 
-    # 4. Guardar resultado en PostgreSQL
+    # 4. Guardar SOLO la Ruta de Aprendizaje en PostgreSQL
     nueva_ruta = None
     if usuario_id:
         try:
@@ -345,10 +347,12 @@ def generar_ruta_ia(payload: dict, db: Session = Depends(get_db)):
             )
             db.add(nueva_ruta)
             db.commit()
-            db.refresh(nueva_ruta)
+            if nueva_ruta:
+                db.refresh(nueva_ruta)
+
         except Exception as e:
             db.rollback()
-            print(f"Error al guardar ruta en BD: {e}")
+            print(f"Error al guardar la ruta en BD: {e}")
 
     return {
         "status": "ok",
@@ -385,7 +389,7 @@ def guardar_diagnostico(data: GuardarDiagnosticoRequest, db: Session = Depends(g
         }
     }
 
-# --- GESTIÓN DE CURSOS (PANEL DE RRHH) ---
+# --- GESTIÓN DE CURSOS ---
 
 @app.post("/api/cursos", status_code=status.HTTP_201_CREATED)
 def crear_curso(curso: CursoCreate, db: Session = Depends(get_db)):
@@ -403,6 +407,16 @@ def listar_cursos(puesto_id: str = None, db: Session = Depends(get_db)):
     cursos = query.all()
     return {"status": "ok", "total": len(cursos), "cursos": cursos}
 
+@app.get("/api/cursos/{curso_id}")
+def obtener_detalle_curso(curso_id: int, db: Session = Depends(get_db)):
+    curso = db.query(models.Curso).filter(models.Curso.id == curso_id).first()
+    if not curso:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, 
+            detail=f"El curso con ID {curso_id} no fue encontrado."
+        )
+    return curso
+
 @app.delete("/api/cursos/{curso_id}")
 def eliminar_curso(curso_id: int, db: Session = Depends(get_db)):
     curso = db.query(models.Curso).filter(models.Curso.id == curso_id).first()
@@ -415,6 +429,7 @@ def eliminar_curso(curso_id: int, db: Session = Depends(get_db)):
 
 @app.get("/api/rutas/usuario/{usuario_id}")
 def obtener_ruta_usuario(usuario_id: int, db: Session = Depends(get_db)):
+    # 1. Obtener la última ruta guardada del usuario
     ruta = db.query(models.RutaAprendizaje)\
              .filter(models.RutaAprendizaje.id_usuario == usuario_id)\
              .order_by(models.RutaAprendizaje.id_ruta.desc())\
@@ -423,10 +438,20 @@ def obtener_ruta_usuario(usuario_id: int, db: Session = Depends(get_db)):
     if not ruta:
         raise HTTPException(status_code=404, detail="El usuario no tiene una ruta de aprendizaje guardada.")
 
+    # 2. Consultar el último score en la tabla diagnosticos usando usuario_id
+    diagnostico = db.query(models.Diagnostico)\
+                    .filter(models.Diagnostico.usuario_id == usuario_id)\
+                    .order_by(models.Diagnostico.id.desc())\
+                    .first()
+
+    # Leemos la columna "score" si existe la fila
+    puntaje_obtenido = diagnostico.score if diagnostico and diagnostico.score is not None else 0
+
     return {
         "status": "ok",
         "id_ruta": ruta.id_ruta,
         "fecha_asignacion": ruta.fecha_asignacion,
+        "puntaje": puntaje_obtenido,
         "ruta": ruta.orden_secuencia_json
     }
 
@@ -550,3 +575,37 @@ def obtener_progreso_usuario(usuario_id: int, db: Session = Depends(get_db)):
             for p in progresos
         ]
     }
+
+from fastapi import Depends
+from sqlalchemy.orm import Session
+# Asegúrate de importar también get_db, Diagnostico y tu modelo si los tienes en otros módulos
+
+# Archivo: main.py (o tu archivo de rutas en FastAPI)
+
+@app.get("/api/diagnostico/ultimo/{usuario_id}")
+async def obtener_ultimo_diagnostico(usuario_id: int, db: Session = Depends(get_db)):
+    try:
+        # Solo usamos 'score' porque esa es la columna real en PostgreSQL
+        query = text("""
+            SELECT * FROM diagnosticos 
+            WHERE usuario_id = :usuario_id AND score > 0
+            ORDER BY fecha DESC 
+            LIMIT 1
+        """)
+        
+        resultado = db.execute(query, {"usuario_id": usuario_id}).fetchone()
+        
+        if not resultado:
+            return {"mensaje": "No hay diagnostico previo", "score": 0}
+            
+        return dict(resultado._mapping)
+    except Exception as e:
+        print(f"Error en diagnostico/ultimo: {e}")
+        # Retornamos score 0 en lugar de crashar la app con status 500
+        return {"mensaje": "Error en servidor", "score": 0}
+    
+@app.get("/api/diagnostico/usuario/{usuario_id}")
+def obtener_diagnosticos_usuario(usuario_id: int, db: Session = Depends(get_db)):
+    # Busca si el usuario ya tiene diagnósticos en PostgreSQL
+    registros = db.query(models.Diagnostico).filter(models.Diagnostico.usuario_id == usuario_id).all()
+    return registros

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 
-export const Dashboard = ({ userProfile, score, onLogout }) => {
+export const Dashboard = ({ userProfile, score, setScore, onLogout }) => {
   const [cursosIA, setCursosIA] = useState([]);
   const [cargando, setCargando] = useState(true);
   const [errorIA, setErrorIA] = useState(null);
@@ -24,15 +24,27 @@ export const Dashboard = ({ userProfile, score, onLogout }) => {
     setErrorIA(null);
 
     const usuarioId = userProfile.id;
-    const puestoIdIA = String(userProfile?.position || userProfile?.puesto || userProfile?.puesto_id || '1');
 
     try {
-      // 1. Intentar obtener la última ruta guardada del usuario en la BD
+      // 1. Solo actualizar score si en App.jsx venía en 0 y el backend tiene un puntaje real > 0
+      if (!score || score === 0) {
+        const resDiag = await fetch(`http://localhost:8000/api/diagnostico/ultimo/${usuarioId}`);
+        if (resDiag.ok) {
+          const dataDiag = await resDiag.json();
+          if (dataDiag && Number(dataDiag.puntaje) > 0) {
+            if (typeof setScore === 'function') {
+              setScore(Number(dataDiag.puntaje));
+            }
+          }
+        }
+      }
+
+      // 2. Consultar rutas ya guardadas en la base de datos
       const resGuardada = await fetch(`http://localhost:8000/api/rutas/usuario/${usuarioId}`);
       if (resGuardada.ok) {
         const dataGuardada = await resGuardada.json();
-        
         let listaGuardada = dataGuardada.ruta || dataGuardada.recomendaciones || dataGuardada.cursos || dataGuardada;
+        
         if (listaGuardada && typeof listaGuardada === 'object' && !Array.isArray(listaGuardada)) {
           listaGuardada = listaGuardada.cursos || listaGuardada.ruta || [];
         }
@@ -44,37 +56,28 @@ export const Dashboard = ({ userProfile, score, onLogout }) => {
         }
       }
 
-      // 2. Si el usuario no tiene ruta previa, pedir a la IA que la genere
+      // 3. Generar la ruta con la IA si no existía
       const resIA = await fetch('http://localhost:8000/api/rutas/generar-ia', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          puesto_id: puestoIdIA,
-          usuario_id: usuarioId,
-          respuestas: []
-        })
+        body: JSON.stringify({ usuario_id: usuarioId })
       });
 
       if (resIA.ok) {
         const dataIA = await resIA.json();
-        let listaRecibida = dataIA.ruta || dataIA.recomendaciones || dataIA.cursos || dataIA;
-
-        if (listaRecibida && typeof listaRecibida === 'object' && !Array.isArray(listaRecibida)) {
-          listaRecibida = listaRecibida.cursos || listaRecibida.ruta || [];
+        let listaIA = dataIA.ruta || dataIA.recomendaciones || dataIA.cursos || dataIA;
+        
+        if (listaIA && typeof listaIA === 'object' && !Array.isArray(listaIA)) {
+          listaIA = listaIA.cursos || listaIA.ruta || [];
         }
 
-        if (Array.isArray(listaRecibida) && listaRecibida.length > 0) {
-          setCursosIA(listaRecibida);
-          setCargando(false);
-          return;
+        if (Array.isArray(listaIA)) {
+          setCursosIA(listaIA);
         }
       }
-
-      setErrorIA('No se pudo generar un plan personalizado en este momento. Intenta de nuevo más tarde.');
-
     } catch (err) {
       console.error('Error al conectar con el motor de IA:', err);
-      setErrorIA('Error de conexión con el motor de IA. No fue posible cargar la ruta personalizada.');
+      setErrorIA('Error de conexión con el motor de IA.');
     } finally {
       setCargando(false);
     }
@@ -90,9 +93,22 @@ export const Dashboard = ({ userProfile, score, onLogout }) => {
     return pos || 'Colaborador';
   };
 
+  const obtenerLinkCurso = (curso) => {
+    if (typeof curso === 'string' && curso.startsWith('http')) return curso;
+    if (typeof curso === 'object' && curso !== null) {
+      return curso.link || curso.url || curso.enlace || curso.link_curso || curso.url_curso || curso.link_externo || curso.material_url || curso.url_recurso || null;
+    }
+    return null;
+  };
+
+  const handleIrACursoDirecto = (link) => {
+    if (!link) return;
+    const urlFinal = link.startsWith('http://') || link.startsWith('https://') ? link : `https://${link}`;
+    window.open(urlFinal, '_blank', 'noopener,noreferrer');
+  };
+
   return (
     <div className="max-w-6xl mx-auto p-6 space-y-6">
-      
       {/* Resumen del perfil */}
       <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
@@ -149,52 +165,61 @@ export const Dashboard = ({ userProfile, score, onLogout }) => {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {cursosIA.map((curso, idx) => {
               const esObjeto = typeof curso === 'object' && curso !== null;
-              const titulo = esObjeto ? (curso.titulo || curso.title || curso.nombre) : String(curso);
+              
+              const titulo = esObjeto ? (curso.nombre || curso.titulo || curso.title) : String(curso);
               const categoria = esObjeto ? (curso.categoria || curso.category || 'Capacitación') : 'Recomendado';
-              const duracion = esObjeto ? (curso.duracion || curso.duration || 'Flexible') : '';
-              const descripcion = esObjeto ? (curso.descripcion || curso.description || '') : '';
+              const duracion = esObjeto ? (curso.duracion || curso.duration || 'Flexible') : 'Flexible';
+              const descripcion = esObjeto ? (
+                curso.descripcion || 
+                curso.description || 
+                curso.detalles || 
+                curso.resumen || 
+                'Curso enfocado en reforzar competencias clave para tu puesto.'
+              ) : 'Curso personalizado para tu perfil profesional.';
+
               const nivel = esObjeto ? (curso.nivel || curso.level || 'General') : 'General';
-              const url = esObjeto ? (curso.url_contenido || curso.url) : null;
+              const linkUrl = obtenerLinkCurso(curso);
+              const tieneLink = Boolean(linkUrl && linkUrl.trim() !== '');
 
               return (
                 <div 
                   key={esObjeto && curso.id ? curso.id : idx} 
-                  className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm hover:shadow-md transition-all flex flex-col justify-between"
+                  className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm hover:shadow-md transition-all flex flex-col justify-between h-full"
                 >
-                  <div className="space-y-2">
+                  <div className="space-y-3">
                     <div className="flex justify-between items-center text-xs">
                       <span className="px-2.5 py-1 bg-indigo-50 text-indigo-700 rounded-lg font-semibold">
                         {categoria}
                       </span>
-                      {duracion && <span className="text-slate-400 font-medium">{duracion}</span>}
+                      <span className="text-slate-500 font-medium bg-slate-100 px-2 py-0.5 rounded-md">
+                        ⏱️ {duracion}
+                      </span>
                     </div>
 
                     <h3 className="font-bold text-slate-900 text-base leading-snug">
                       {titulo}
                     </h3>
 
-                    {descripcion && (
-                      <p className="text-slate-500 text-xs line-clamp-2">
-                        {descripcion}
-                      </p>
-                    )}
+                    <p className="text-slate-600 text-xs leading-relaxed border-t border-slate-100 pt-2 mt-2">
+                      {descripcion}
+                    </p>
                   </div>
 
                   <div className="pt-4 mt-4 border-t border-slate-100 flex justify-between items-center">
                     <span className="text-xs text-slate-400">Nivel: <strong className="text-slate-600">{nivel}</strong></span>
                     
-                    {url ? (
-                      <a
-                        href={url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-lg transition-colors"
+                    {tieneLink ? (
+                      <button
+                        type="button"
+                        onClick={() => handleIrACursoDirecto(linkUrl)}
+                        className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl transition-all shadow-sm hover:shadow-md flex items-center gap-1.5 cursor-pointer active:scale-95"
                       >
-                        Ir al Curso
-                      </a>
+                        <span>Ir a curso</span>
+                        <span className="text-sm">↗</span>
+                      </button>
                     ) : (
-                      <span className="px-3 py-1.5 bg-slate-100 text-slate-600 text-xs font-semibold rounded-lg">
-                        Asignado
+                      <span className="px-3 py-1.5 bg-slate-100 border border-slate-200 text-slate-400 text-xs font-medium rounded-xl flex items-center gap-1 select-none">
+                        <span className="text-xs">🔒</span> Sin enlace disponible
                       </span>
                     )}
                   </div>
@@ -204,7 +229,6 @@ export const Dashboard = ({ userProfile, score, onLogout }) => {
           </div>
         )}
       </div>
-
     </div>
   );
 };

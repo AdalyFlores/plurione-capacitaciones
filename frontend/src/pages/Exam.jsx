@@ -45,6 +45,9 @@ export const Exam = ({ examData, userName = "Empleado", userProfile = {}, onComp
   };
 
   const handleFinalize = async () => {
+    // Evitar que se ejecute más de una vez (por clic repetido o por el temporizador)
+    if (submitted) return;
+
     let totalScore = 0;
     examData?.preguntas?.forEach((q) => {
       const selectedIndex = answers[q.id];
@@ -59,12 +62,13 @@ export const Exam = ({ examData, userName = "Empleado", userProfile = {}, onComp
     setSubmitted(true);
     setIsGeneratingPath(true);
 
-    // Extraer variables dinámicas directamente del usuario sesionado
-    const activeUserId = userProfile?.id;
-    const activePuestoId = String(userProfile?.position || userProfile?.puesto || userProfile?.puesto_id || '1');
+    // Extraer datos del usuario y normalizar puesto para no enviar "Desarrollador Backend"
+    const activeUserId = userProfile?.id || 1;
+    const puestoRaw = userProfile?.puesto_id || userProfile?.position || userProfile?.puesto || 'dev';
+    const activePuestoId = String(puestoRaw).toLowerCase().includes('backend') ? 'dev' : String(puestoRaw);
 
     try {
-      // 1. Guardar diagnóstico en BD
+      // 1. Guardar diagnóstico único en la base de datos
       const resDiag = await fetch('http://localhost:8000/api/diagnostico/guardar', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -74,8 +78,11 @@ export const Exam = ({ examData, userName = "Empleado", userProfile = {}, onComp
           score: calculatedScore,
         }),
       });
-      const dataDiag = await resDiag.json();
-      console.log('✅ Diagnóstico guardado en BD:', dataDiag);
+
+      if (resDiag.ok) {
+        const dataDiag = await resDiag.json();
+        console.log('✅ Diagnóstico guardado en BD:', dataDiag);
+      }
 
       // 2. Generar la ruta adaptativa mediante la IA de Gemini
       const resIA = await fetch('http://localhost:8000/api/rutas/generar-ia', {
@@ -87,8 +94,11 @@ export const Exam = ({ examData, userName = "Empleado", userProfile = {}, onComp
           respuestas: answers,
         }),
       });
-      const dataIA = await resIA.json();
-      console.log('🤖 Ruta de IA generada:', dataIA);
+
+      if (resIA.ok) {
+        const dataIA = await resIA.json();
+        console.log('🤖 Ruta de IA generada:', dataIA);
+      }
 
     } catch (err) {
       console.error('❌ Error guardando el diagnóstico o generando la ruta de IA:', err);
