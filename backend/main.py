@@ -1,27 +1,28 @@
 import os
 from datetime import date, datetime, timezone
-from typing import List
+from typing import List, Optional
+import json
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, status, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-from models import Diagnostico, Base  # Asegúrate de importar Diagnostico desde tu archivo de modelos
-# Carga de variables de entorno (.env)
-load_dotenv()
 
 import models
 from database import engine, get_db
-from services.ai_adapter import generar_ruta_aprendizaje
+from services.ai_adapter import generar_ruta_aprendizaje, generar_evaluacion_final
+
+# Carga de variables de entorno (.env)
+load_dotenv()
 
 # Crear tablas en PostgreSQL si no existen
 models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
 
-# Configuración de CORS para conexión con el Frontend (React)
+# Mapeo CORS para que tu React (localhost:5173) no tenga bloqueos
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -29,6 +30,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+router = APIRouter()
 
 # --- ESQUEMAS DE PYDANTIC ---
 
@@ -72,6 +75,19 @@ class CursoResponse(CursoCreate):
 
     class Config:
         from_attributes = True
+
+class ProgresoUpdate(BaseModel):
+    id_usuario: int
+    id_curso: int
+    accion: str  # 'launched' o 'completed'
+    
+class ResultadoExamenSchema(BaseModel):
+    usuario_id: int
+    puntaje: int
+    aciertos: int
+    total_preguntas: int
+    aprobado: bool
+    intentos_restantes: int
 
 # --- DATOS ESTÁTICOS / SIMULADOS EN MEMORIA ---
 
@@ -429,7 +445,7 @@ def eliminar_curso(curso_id: int, db: Session = Depends(get_db)):
 
 @app.get("/api/rutas/usuario/{usuario_id}")
 def obtener_ruta_usuario(usuario_id: int, db: Session = Depends(get_db)):
-    # 1. Obtener la última ruta guardada del usuario
+    # 1. Obtener la última ruta del usuario
     ruta = db.query(models.RutaAprendizaje)\
              .filter(models.RutaAprendizaje.id_usuario == usuario_id)\
              .order_by(models.RutaAprendizaje.id_ruta.desc())\
@@ -438,21 +454,68 @@ def obtener_ruta_usuario(usuario_id: int, db: Session = Depends(get_db)):
     if not ruta:
         raise HTTPException(status_code=404, detail="El usuario no tiene una ruta de aprendizaje guardada.")
 
-    # 2. Consultar el último score en la tabla diagnosticos usando usuario_id
+    # 2. Consultar el diagnóstico
     diagnostico = db.query(models.Diagnostico)\
                     .filter(models.Diagnostico.usuario_id == usuario_id)\
                     .order_by(models.Diagnostico.id.desc())\
                     .first()
 
-    # Leemos la columna "score" si existe la fila
     puntaje_obtenido = diagnostico.score if diagnostico and diagnostico.score is not None else 0
+
+    # 3. Obtener catálogo de la BD para asociar URLs reales a cada curso dinámicamente
+    todos_los_cursos = db.query(models.Curso).all()
+    
+    # Mapeo por título en minúsculas para encontrar coincidencias fácilmente
+    mapa_urls = {
+        c.titulo.strip().lower(): c.url_contenido 
+        for c in todos_los_cursos if c.titulo and c.url_contenido
+    }
+
+    # 4. Extraer el arreglo de cursos guardado en el JSON
+    datos_json = ruta.orden_secuencia_json or {}
+    
+    if isinstance(datos_json, dict):
+        lista_cursos_raw = datos_json.get("ruta") or datos_json.get("cursos") or []
+    elif isinstance(datos_json, list):
+        lista_cursos_raw = datos_json
+    else:
+        lista_cursos_raw = []
+
+    # 5. Enriquecer cada curso de la lista con su URL de la base de datos
+    cursos_enriquecidos = []
+    for curso in lista_cursos_raw:
+        if isinstance(curso, dict):
+            titulo = (curso.get("nombre") or curso.get("titulo") or "").strip()
+            # Buscar coincidencia exacta o parcial de título en la tabla de Cursos
+            url_hallada = curso.get("url_contenido")
+            if not url_hallada:
+                for t_db, url_db in mapa_urls.items():
+                    if t_db in titulo.lower() or titulo.lower() in t_db:
+                        url_hallada = url_db
+                        break
+            
+            curso["url_contenido"] = url_hallada
+            cursos_enriquecidos.append(curso)
+            
+        elif isinstance(curso, str):
+            titulo = curso.strip()
+            url_hallada = None
+            for t_db, url_db in mapa_urls.items():
+                if t_db in titulo.lower() or titulo.lower() in t_db:
+                    url_hallada = url_db
+                    break
+
+            cursos_enriquecidos.append({
+                "nombre": titulo,
+                "url_contenido": url_hallada
+            })
 
     return {
         "status": "ok",
         "id_ruta": ruta.id_ruta,
         "fecha_asignacion": ruta.fecha_asignacion,
         "puntaje": puntaje_obtenido,
-        "ruta": ruta.orden_secuencia_json
+        "ruta": cursos_enriquecidos
     }
 
 # --- TRACKING DE PROGRESO Y FORMATO xAPI ---
@@ -510,7 +573,17 @@ def generar_xapi_statement(usuario, curso, estatus: str, calificacion: float = N
 def actualizar_progreso(payload: dict, db: Session = Depends(get_db)):
     usuario_id = payload.get("id_usuario")
     curso_id = payload.get("id_curso")
-    nuevo_estatus = payload.get("estatus", "En progreso")
+    accion = payload.get("accion")  # Viene como 'launched' o 'completed' desde el frontend
+    
+    # 1. Mapeamos la acción xAPI al estatus correspondiente para la BD
+    if accion == "completed":
+        nuevo_estatus = "completado"
+    elif accion == "launched":
+        nuevo_estatus = "En progreso"
+    else:
+        # Fallback por si envían el estatus directamente
+        nuevo_estatus = payload.get("estatus", "En progreso")
+
     calificacion = payload.get("calificacion", None)
 
     if not usuario_id or not curso_id:
@@ -609,3 +682,233 @@ def obtener_diagnosticos_usuario(usuario_id: int, db: Session = Depends(get_db))
     # Busca si el usuario ya tiene diagnósticos en PostgreSQL
     registros = db.query(models.Diagnostico).filter(models.Diagnostico.usuario_id == usuario_id).all()
     return registros
+
+@app.get("/api/cursos")
+def obtener_todos_los_cursos(db: Session = Depends(get_db)):
+    cursos = db.query(models.Curso).all()
+    return [
+        {
+            "id": c.id,
+            "titulo": c.titulo,
+            "descripcion": c.descripcion,
+            "categoria": getattr(c, 'categoria', 'Capacitación'),
+            "duracion": getattr(c, 'duracion', 'Flexible'),
+            "nivel": getattr(c, 'nivel', 'General'),
+            "url_contenido": c.url_contenido
+        }
+        for c in cursos
+    ]
+    
+@app.post("/api/progreso/actualizar")
+def registrar_progreso_xapi(data: ProgresoUpdate, db: Session = Depends(get_db)):
+    # 1. Verificar existencia de usuario y curso en la BD
+    usuario = db.query(models.Usuario).filter(models.Usuario.id == data.id_usuario).first()
+    curso = db.query(models.Curso).filter(models.Curso.id == data.id_curso).first()
+
+    if not usuario or not curso:
+        raise HTTPException(status_code=404, detail="Usuario o Curso no encontrado")
+
+    # 2. Configurar Verbo y Estatus según la acción recibida
+    if data.accion == "completed":
+        verb_id = "http://adlnet.gov/expapi/verbs/completed"
+        verb_display = {"en-US": "completed", "es-ES": "completó"}
+        estatus_bd = "Completado"
+    else:
+        verb_id = "http://adlnet.gov/expapi/verbs/launched"
+        verb_display = {"en-US": "launched", "es-ES": "inició"}
+        estatus_bd = "En progreso"
+
+    # 3. Construir el Statement xAPI Oficial
+    xapi_statement = {
+        "actor": {
+            "objectType": "Agent",
+            "name": usuario.nombre,
+            "mbox": f"mailto:{getattr(usuario, 'email', None) or f'usuario{usuario.id}@empresa.com'}"
+        },
+        "verb": {
+            "id": verb_id,
+            "display": verb_display
+        },
+        "object": {
+            "objectType": "Activity",
+            "id": curso.url_contenido or f"http://empresa.com/cursos/{curso.id}",
+            "definition": {
+                "name": {"es-ES": curso.titulo},
+                "description": {"es-ES": f"Capacitación en {curso.titulo}"},
+                "type": "http://adlnet.gov/expapi/activities/course"
+            }
+        },
+        "timestamp": datetime.utcnow().isoformat() + "Z"
+    }
+
+    # 4. Actualizar o Crear el registro de Progreso en PostgreSQL
+    progreso = db.query(models.Progreso).filter(
+        models.Progreso.id_usuario == data.id_usuario,
+        models.Progreso.id_curso == data.id_curso
+    ).first()
+
+    if not progreso:
+        progreso = models.Progreso(
+            id_usuario=data.id_usuario,
+            id_curso=data.id_curso,
+            estatus=estatus_bd,
+            fecha_inicio=datetime.utcnow()
+        )
+        db.add(progreso)
+    else:
+        progreso.estatus = estatus_bd
+        if data.accion == "completed":
+            progreso.fecha_completado = datetime.utcnow()
+
+    db.commit()
+
+    print(f"✅ xAPI Statement [{data.accion.upper()}]:", json.dumps(xapi_statement, indent=2))
+
+    return {
+        "status": "ok",
+        "estatus_actual": estatus_bd,
+        "statement": xapi_statement
+    }
+
+@app.get("/api/progreso/usuario/{usuario_id}")
+def obtener_progreso_usuario(usuario_id: int, db: Session = Depends(get_db)):
+    progresos = db.query(models.Progreso).filter(models.Progreso.id_usuario == usuario_id).all()
+    return [
+        {
+            "id_curso": p.id_curso,
+            "estatus": p.estatus
+        }
+        for p in progresos
+    ]
+
+@app.post("/api/evaluaciones/generar")
+def api_generar_evaluacion(payload: dict, db: Session = Depends(get_db)):
+    usuario_id = payload.get("usuario_id")
+    
+    if not usuario_id:
+        raise HTTPException(status_code=400, detail="usuario_id es requerido.")
+
+    # 1. Buscar la ruta en la base de datos usando la columna correcta id_usuario
+    ruta_guardada = db.query(models.RutaAprendizaje).filter(
+        models.RutaAprendizaje.id_usuario == usuario_id
+    ).first()
+
+    cursos = []
+    puesto = "Colaborador"
+
+    if ruta_guardada:
+        puesto = getattr(ruta_guardada, "puesto", None) or "Colaborador"
+        
+        # Intentar obtener los cursos del objeto encontrado
+        cursos_raw = (
+            getattr(ruta_guardada, "ruta", None) or 
+            getattr(ruta_guardada, "recomendaciones", None) or 
+            getattr(ruta_guardada, "ruta_recomendada", None) or 
+            getattr(ruta_guardada, "contenido", None) or
+            getattr(ruta_guardada, "cursos", None)
+        )
+
+        if cursos_raw:
+            if isinstance(cursos_raw, str):
+                try:
+                    cursos = json.loads(cursos_raw)
+                except Exception:
+                    cursos = []
+            else:
+                cursos = cursos_raw
+
+            if isinstance(cursos, dict):
+                cursos = cursos.get("ruta") or cursos.get("cursos") or []
+
+    # 2. Si no se encontraron cursos en la BD, tomar los que envía el frontend como respaldo
+    if not cursos and payload.get("cursos"):
+        cursos = payload.get("cursos")
+
+    if not cursos:
+        raise HTTPException(
+            status_code=404, 
+            detail=f"No se encontraron cursos asignados para el usuario ID: {usuario_id}"
+        )
+
+    # 3. Generar el examen con Gemini
+    examen_generado = generar_evaluacion_final(
+        puesto_nombre=puesto,
+        cursos_asignados=cursos
+    )
+
+    return {
+        "status": "ok",
+        "evaluacion": examen_generado
+    }
+
+# 1. Endpoint para GUARDAR el resultado en PostgreSQL
+@router.post("/api/evaluaciones/guardar-resultado")
+async def guardar_resultado(datos: ResultadoExamenSchema, db: Session = Depends(get_db)):
+    try:
+        query = text("""
+            INSERT INTO evaluaciones_resultados 
+            (usuario_id, puntaje, aciertos, total_preguntas, aprobado, intentos_restantes)
+            VALUES (:usuario_id, :puntaje, :aciertos, :total_preguntas, :aprobado, :intentos_restantes)
+        """)
+        
+        db.execute(query, {
+            "usuario_id": datos.usuario_id,
+            "puntaje": datos.puntaje,
+            "aciertos": datos.aciertos,
+            "total_preguntas": datos.total_preguntas,
+            "aprobado": datos.aprobado,
+            "intentos_restantes": datos.intentos_restantes
+        })
+        db.commit()
+
+        return {"status": "ok", "mensaje": "Resultado guardado correctamente para RH"}
+    except Exception as e:
+        db.rollback()
+        print(f"Error al guardar resultado: {e}")
+        raise HTTPException(status_code=500, detail="Error al guardar el resultado en la base de datos")
+
+
+# 2. Endpoint para CONSULTAR el último examen presentado en PostgreSQL
+@router.get("/api/evaluaciones/ultimo/{usuario_id}")
+async def obtener_ultimo_examen(usuario_id: int, db: Session = Depends(get_db)):
+    try:
+        query = text("""
+            SELECT id, usuario_id, puntaje, aciertos, total_preguntas, aprobado, intentos_restantes
+            FROM evaluaciones_resultados 
+            WHERE usuario_id = :usuario_id 
+            ORDER BY fecha_evaluacion DESC 
+            LIMIT 1
+        """)
+        
+        resultado = db.execute(query, {"usuario_id": usuario_id}).fetchone()
+
+        # Si el usuario NO tiene ningún examen registrado aún:
+        if not resultado:
+            return {
+                "id": None,
+                "usuario_id": usuario_id,
+                "puntaje": 0,
+                "aciertos": 0,
+                "total_preguntas": 0,
+                "aprobado": False,
+                "intentos_restantes": 3
+            }
+
+        # Si SÍ tiene examen guardado:
+        return {
+            "id": resultado.id,
+            "usuario_id": resultado.usuario_id,
+            "puntaje": resultado.puntaje,
+            "aciertos": resultado.aciertos,
+            "total_preguntas": resultado.total_preguntas,
+            "aprobado": resultado.aprobado,
+            "intentos_restantes": resultado.intentos_restantes
+        }
+    except Exception as e:
+        print(f"Error al obtener evaluación: {e}")
+        raise HTTPException(status_code=500, detail="Error interno al obtener evaluación")
+
+
+# ¡¡AQUÍ ESTÁ LA CLAVE QUE FALTABA!!
+# Se incluye el router registrado en la instancia principal de FastAPI
+app.include_router(router)

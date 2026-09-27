@@ -18,6 +18,15 @@ export function Login({ onLogin }) {
       rol: "empleado",
       puesto: "recruiter",
       departamento: "Recursos Humanos"
+    },
+    // Si vas con la Opción 1 (crear Laura en ID 6):
+    {
+       id: 6,
+       nombre: "Laura Martínez (Dev Nuevo)",
+       email: "laura.martinez@plurione.com",
+       rol: "empleado",
+       puesto: "dev",
+       departamento: "Tecnología"
     }
   ];
 
