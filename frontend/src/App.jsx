@@ -2,8 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Login } from './pages/Login';
 import { Exam } from './pages/Exam';
 import { Dashboard } from './pages/Dashboard';
-import { GestionCursos } from './pages/GestionCursos';
-import { Curso } from './pages/Curso';
+import { PanelRRHH } from './pages/PanelRRHH';
 
 export default function App() {
   const [step, setStep] = useState(1); 
@@ -27,66 +26,75 @@ export default function App() {
   }, []);
 
   const handleLogin = async (user) => {
+    console.log("DATOS DEL USUARIO LOGUEADO:", user);
     setCurrentUser(user);
     localStorage.setItem('pluriUser', JSON.stringify(user));
 
-    if (user?.rol === 'rrhh' || user?.rol === 'admin') {
-      setStep(5);
-      return;
+   if (user?.rol === 'rh' || user?.rol === 'rrhh' || user?.rol === 'admin') {
+     setStep(5);
+     return;
     }
 
-    const userId = user?.id || 1;
-    const puestoMapeado = String(user?.puesto || user?.puesto_id || 'dev');
+    const userId = user?.id;
+    const puestoMapeado = String(user?.puesto || user?.puesto_id || 'recruiter');
+    const deptoMapeado = String(user?.departamento || 'Marketing');
 
     const perfilActualizado = {
       id: userId,
       name: user.nombre || user.email,
       position: puestoMapeado,
       puesto_id: puestoMapeado,
-      department: user.departamento || 'tecnologia'
+      department: deptoMapeado
     };
 
     setUserProfile(perfilActualizado);
 
     try {
-      // 1. Consultar el último diagnóstico completado del usuario
+      // 1. Consultar el último diagnóstico completado en la BD
       const resDiag = await fetch(`http://localhost:8000/api/diagnostico/ultimo/${userId}`);
       
       if (resDiag.ok) {
         const dataDiag = await resDiag.json();
-        const puntajeObtenido = Number(dataDiag.score || 0);
+        const puntajeObtenido = Number(dataDiag?.score || dataDiag?.puntaje || 0);
 
-        // Si la base de datos devuelve un puntaje mayor a 0, vamos directo al Dashboard
+        // Si el usuario ya completó un examen previamente con score > 0, va al Dashboard
         if (puntajeObtenido > 0) {
           setFinalScore(puntajeObtenido);
-          setStep(4); // Pantalla de Dashboard (Mi Ruta)
+          setStep(4); // Dashboard
           return;
         }
       }
 
-      // 2. Solo si el usuario NO tiene puntaje previo en BD, se inicia el examen
-      const resExam = await fetch('http://localhost:8000/api/diagnostico/iniciar', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: user.email || 'colaborador@plurione.com',
-          departamento: perfilActualizado.department,
-          puesto: perfilActualizado.position,
-        }),
-      });
+      // 2. Si no tiene examen previo, pedimos las preguntas guardadas por RH en BD
+      const resExam = await fetch(`http://localhost:8000/api/evaluaciones/diagnostico/${puestoMapeado}`);
 
       if (resExam.ok) {
-        const resData = await resExam.json();
-        setExamData(resData.examen || resData);
-        setStep(3); // Ir a la vista del Examen
-        return;
+        const dataBD = await resExam.json();
+        const listaPreguntasBD = dataBD.preguntas || dataBD;
+
+        if (Array.isArray(listaPreguntasBD) && listaPreguntasBD.length > 0) {
+          const preguntasFormateadas = listaPreguntasBD.map(p => ({
+            id: p.id,
+            texto: p.pregunta || p.texto,
+            opciones: p.opciones
+          }));
+
+          setExamData({
+            titulo: `Evaluación Diagnóstica: ${puestoMapeado}`,
+            duracion_minutos: 10,
+            preguntas: preguntasFormateadas
+          });
+          setStep(3); 
+          return;
+        }
       }
 
+      // Si no hay preguntas registradas en BD, ir al examen de todas formas
       setStep(3);
 
     } catch (err) {
       console.error('Error durante la verificación del usuario:', err);
-      setStep(4);
+      setStep(3);
     }
   };
 
@@ -111,7 +119,7 @@ export default function App() {
     setStep(1);
   };
 
-  const esRRHH = currentUser?.rol === 'rrhh' || currentUser?.rol === 'admin';
+  const esRRHH = currentUser?.rol === 'rh' || currentUser?.rol === 'rrhh' || currentUser?.rol === 'admin';
 
   return (
     <div className="min-h-screen bg-slate-100 font-sans">
@@ -173,10 +181,11 @@ export default function App() {
         />
       )}
 
+      {/* Step 5: Modulo Completo de RRHH */}
       {step === 5 && (
-        <div className="p-6">
+        <div>
           {esRRHH ? (
-            <GestionCursos />
+            <PanelRRHH />
           ) : (
             <div className="text-center py-10">
               <h2 className="text-2xl font-bold text-red-600">Acceso Denegado</h2>

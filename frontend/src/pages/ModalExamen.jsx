@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 
-export const ModalExamen = ({ examenData, intentosRestantes, onClose, FinalizarExamen }) => {
+export const ModalExamen = ({ examenData, intentosRestantes, onClose, FinalizarExamen, usuarioId }) => {
   const [preguntaActual, setPreguntaActual] = useState(0);
   const [respuestasSeleccionadas, setRespuestasSeleccionadas] = useState({});
   const [examenEnviado, setExamenEnviado] = useState(false);
@@ -17,7 +17,7 @@ export const ModalExamen = ({ examenData, intentosRestantes, onClose, FinalizarE
     });
   };
 
-  const calcularCalificacion = () => {
+  const calcularCalificacion = async () => {
     let aciertos = 0;
     preguntas.forEach((q, idx) => {
       if (respuestasSeleccionadas[idx] === q.respuesta_correcta) {
@@ -25,7 +25,7 @@ export const ModalExamen = ({ examenData, intentosRestantes, onClose, FinalizarE
       }
     });
 
-    const puntaje = Math.round((aciertos / totalPreguntas) * 100);
+    const puntaje = Math.round((aciertos / (totalPreguntas || 1)) * 100);
     const aprobado = puntaje >= 80;
 
     const res = {
@@ -38,7 +38,30 @@ export const ModalExamen = ({ examenData, intentosRestantes, onClose, FinalizarE
     setResultado(res);
     setExamenEnviado(true);
 
-    // Notificar al padre (Dashboard/Backend)
+    // 1. Enviar evento xAPI al Backend
+    try {
+      const activeUserId = usuarioId || 1;
+      await fetch('http://localhost:8000/api/xapi/statements', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          usuario_id: activeUserId,
+          verb: aprobado ? 'passed' : 'failed',
+          object_id: 'evaluacion-final-capacitacion',
+          statement_json: {
+            score: puntaje,
+            aciertos: aciertos,
+            total_preguntas: totalPreguntas,
+            status: aprobado ? 'passed' : 'failed'
+          }
+        })
+      });
+      console.log('✅ Evento xAPI de examen final registrado');
+    } catch (err) {
+      console.error('❌ Error registrando evento xAPI en ModalExamen:', err);
+    }
+
+    // 2. Notificar al padre
     if (FinalizarExamen) {
       FinalizarExamen(res);
     }
@@ -71,7 +94,7 @@ export const ModalExamen = ({ examenData, intentosRestantes, onClose, FinalizarE
             <div className="w-full bg-slate-100 rounded-full h-2 mb-4">
               <div 
                 className="bg-indigo-600 h-2 rounded-full transition-all duration-300"
-                style={{ width: `${((preguntaActual + 1) / totalPreguntas) * 100}%` }}
+                style={{ width: `${((preguntaActual + 1) / (totalPreguntas || 1)) * 100}%` }}
               ></div>
             </div>
 

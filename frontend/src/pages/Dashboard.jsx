@@ -74,7 +74,7 @@ export const Dashboard = ({ userProfile, score, setScore, onLogout }) => {
 
       setCursosIA(listaCursosFinal);
 
-      // 2. Cargar estado del progreso de cursos (xAPI)
+      // 2. Cargar estado del progreso de cursos
       try {
         const resProgreso = await fetch(`http://localhost:8000/api/progreso/usuario/${usuarioId}`);
         if (resProgreso.ok) {
@@ -143,14 +143,6 @@ export const Dashboard = ({ userProfile, score, setScore, onLogout }) => {
     }
   };
 
-  const obtenerNombrePuesto = (pos) => {
-    const p = String(pos || '').toLowerCase();
-    if (p === '1' || p === 'dev' || p === 'backend') return 'Desarrollador Backend';
-    if (p === '2' || p === 'frontend') return 'Desarrollador Frontend';
-    if (p === '3' || p === 'marketing') return 'Especialista en Marketing';
-    if (p === '4' || p === 'analitica') return 'Analista de Datos';
-    return pos || 'Colaborador';
-  };
 
   const obtenerLinkCurso = (curso) => {
     if (!curso) return null;
@@ -164,9 +156,11 @@ export const Dashboard = ({ userProfile, score, setScore, onLogout }) => {
     return null;
   };
 
+  // Función con integración xAPI completa
   const registrarProgresoXAPI = async (idCurso, accion) => {
     if (!idCurso) return;
     try {
+      // 1. Actualizar en el endpoint de progreso local
       const res = await fetch('http://localhost:8000/api/progreso/actualizar', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -185,8 +179,25 @@ export const Dashboard = ({ userProfile, score, setScore, onLogout }) => {
           [Number(idCurso)]: true
         }));
       }
+
+      // 2. Enviar evento xAPI al LRS / Backend xAPI
+      await fetch('http://localhost:8000/api/xapi/statements', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          usuario_id: userProfile?.id,
+          verb: accion === 'completed' ? 'completed' : 'launched',
+          object_id: `curso-${idCurso}`,
+          statement_json: {
+            curso_id: idCurso,
+            accion: accion
+          }
+        })
+      });
+      console.log(`✅ Evento xAPI (${accion}) registrado para el curso ${idCurso}`);
+
     } catch (err) {
-      console.error('Error al actualizar xAPI:', err);
+      console.error('Error al actualizar xAPI en curso:', err);
     }
   };
 
@@ -271,7 +282,7 @@ export const Dashboard = ({ userProfile, score, setScore, onLogout }) => {
       console.error("❌ Error al guardar el resultado en la BD:", error);
     }
   };
-
+console.log("Perfil recibido en Dashboard:", userProfile);
   return (
     <div className="max-w-6xl mx-auto p-6 space-y-6">
       {/* Información del Perfil */}
@@ -281,8 +292,8 @@ export const Dashboard = ({ userProfile, score, setScore, onLogout }) => {
             ¡Hola, {userProfile?.name || userProfile?.nombre || 'Empleado'}!
           </h1>
           <p className="text-slate-500 text-sm mt-1">
-            Puesto: <strong className="text-slate-700">{obtenerNombrePuesto(userProfile?.position || userProfile?.puesto)}</strong> | 
-            Departamento: <strong className="text-slate-700">{userProfile?.department || userProfile?.departamento || 'General'}</strong>
+            Puesto: <strong className="text-slate-700"> {userProfile?.position || userProfile?.puesto_id || 'General'} </strong> | 
+            Departamento: <strong className="text-slate-700"> {userProfile?.department || userProfile?.departamento_id || 'General'} </strong>
           </p>
         </div>
 
@@ -328,6 +339,7 @@ export const Dashboard = ({ userProfile, score, setScore, onLogout }) => {
           </div>
         ) : (
           <>
+            {console.log("🔍 ESTRUCTURA DE CURSOS IA:", cursosIA)}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {cursosIA.map((curso, idx) => {
                 const esObjeto = typeof curso === 'object' && curso !== null;
@@ -335,9 +347,11 @@ export const Dashboard = ({ userProfile, score, setScore, onLogout }) => {
                 const titulo = esObjeto ? (curso.nombre || curso.titulo || curso.title) : String(curso);
                 const categoria = esObjeto ? (curso.categoria || curso.category || 'Capacitación') : 'Recomendado';
                 const duracion = esObjeto ? (curso.duracion || curso.duration || 'Flexible') : 'Flexible';
+                
+                // ✅ Mapeo de justificación desde BD y eliminación de valor estático por defecto
                 const descripcion = esObjeto ? (
-                  curso.descripcion || curso.description || 'Curso enfocado en reforzar competencias del puesto.'
-                ) : 'Curso de capacitación profesional.';
+                  curso.justificacion || curso.descripcion || curso.description || curso.desc || ''
+                ) : '';
 
                 const nivel = esObjeto ? (curso.nivel || curso.level || 'General') : 'General';
                 const linkUrl = obtenerLinkCurso(curso);
@@ -367,9 +381,12 @@ export const Dashboard = ({ userProfile, score, setScore, onLogout }) => {
                         {titulo}
                       </h3>
 
-                      <p className="text-slate-600 text-xs leading-relaxed border-t border-slate-100 pt-2 mt-2">
-                        {descripcion}
-                      </p>
+                      {/* ✅ Renderizado condicional de la descripción/justificación */}
+                      {descripcion && (
+                        <p className="text-slate-600 text-xs leading-relaxed border-t border-slate-100 pt-2 mt-2 line-clamp-3">
+                          {descripcion}
+                        </p>
+                      )}
                     </div>
 
                     <div className="pt-4 mt-4 border-t border-slate-100 flex flex-col gap-2">
@@ -458,13 +475,14 @@ export const Dashboard = ({ userProfile, score, setScore, onLogout }) => {
         )}
       </div>
 
-      {/* Renderizado del Modal de Examen */}
+      {/* Renderizado del Modal de Examen pasándole la prop usuarioId */}
       {mostrarExamen && (
         <ModalExamen
           examenData={datosExamen}
           intentosRestantes={intentosRestantes}
           onClose={() => setMostrarExamen(false)}
           FinalizarExamen={manejarFinalizacion}
+          usuarioId={userProfile?.id}
         />
       )}
     </div>

@@ -45,7 +45,7 @@ export const Exam = ({ examData, userName = "Empleado", userProfile = {}, onComp
   };
 
   const handleFinalize = async () => {
-    // Evitar que se ejecute más de una vez (por clic repetido o por el temporizador)
+    // Evitar que se ejecute más de una vez
     if (submitted) return;
 
     let totalScore = 0;
@@ -62,7 +62,7 @@ export const Exam = ({ examData, userName = "Empleado", userProfile = {}, onComp
     setSubmitted(true);
     setIsGeneratingPath(true);
 
-    // Extraer datos del usuario y normalizar puesto para no enviar "Desarrollador Backend"
+    // Extraer datos del usuario y normalizar puesto 
     const activeUserId = userProfile?.id || 1;
     const puestoRaw = userProfile?.puesto_id || userProfile?.position || userProfile?.puesto || 'dev';
     const activePuestoId = String(puestoRaw).toLowerCase().includes('backend') ? 'dev' : String(puestoRaw);
@@ -83,6 +83,22 @@ export const Exam = ({ examData, userName = "Empleado", userProfile = {}, onComp
         const dataDiag = await resDiag.json();
         console.log('✅ Diagnóstico guardado en BD:', dataDiag);
       }
+
+      // 2. REGISTRAR EVENTO EN xAPI (Learning Record Store)
+      await fetch('http://localhost:8000/api/xapi/statements', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          usuario_id: activeUserId,
+          verb: 'completed',
+          object_id: 'diagnostico-inicial',
+          statement_json: {
+            score: calculatedScore,
+            status: calculatedScore >= 70 ? 'passed' : 'failed',
+            puesto: activePuestoId
+          }
+        })
+      });
 
       // 2. Generar la ruta adaptativa mediante la IA de Gemini
       const resIA = await fetch('http://localhost:8000/api/rutas/generar-ia', {

@@ -46,13 +46,13 @@ def generar_ruta_aprendizaje(puesto_nombre: str, respuestas_diagnostico: list, c
     }}
     """
 
-    # 2. Configuración de Reintentos (Backoff Exponencial)
+    # 2. Configuración de Reintentos 
     max_retries = 3
-    delay = 2  # segundos base de espera
+    delay = 2  
 
     for intento in range(max_retries):
         try:
-            # Llamada al modelo recomendado gemini-3.6-flash
+            
             response = client.models.generate_content(
                 model="gemini-3.6-flash",
                 contents=prompt,
@@ -61,7 +61,7 @@ def generar_ruta_aprendizaje(puesto_nombre: str, respuestas_diagnostico: list, c
                 )
             )
             
-            # Limpieza básica de respuesta y parseo JSON
+            
             texto_limpio = response.text.strip()
             if texto_limpio.startswith("```json"):
                 texto_limpio = texto_limpio.replace("```json", "", 1).rstrip("```").strip()
@@ -69,7 +69,7 @@ def generar_ruta_aprendizaje(puesto_nombre: str, respuestas_diagnostico: list, c
             return json.loads(texto_limpio)
 
         except APIError as e:
-            # Si el error es 503 (Servidor ocupado) y aún nos quedan intentos, esperamos y reintentamos
+            
             if getattr(e, 'code', None) == 503 and intento < max_retries - 1:
                 tiempo_espera = delay * (intento + 1)
                 print(f"[IA Retry] Servidor ocupado (503). Reintentando en {tiempo_espera}s... (Intento {intento + 1}/{max_retries})")
@@ -83,7 +83,7 @@ def generar_ruta_aprendizaje(puesto_nombre: str, respuestas_diagnostico: list, c
             print(f"Error inesperado al procesar la respuesta de IA: {e}")
             break
 
-    # 3. Ruta de Fallback (Si fallan los 3 intentos o hay otro error)
+    # 3. Ruta de Fallback 
     print("[IA Fallback] Entregando ruta de respaldo predeterminada.")
     return {
         "puesto": puesto_nombre,
@@ -103,34 +103,40 @@ def generar_ruta_aprendizaje(puesto_nombre: str, respuestas_diagnostico: list, c
     
 def generar_evaluacion_final(puesto_nombre: str, cursos_asignados: list):
     """
-    Genera un examen de 5 preguntas por cada curso asignado usando Gemini.
-    Usa la librería google.genai con reintentos para error 503.
+    Genera un examen técnico usando Gemini (5 preguntas por curso).
+    Incluye un Fallback enriquecido con opciones realistas en caso de contingencia.
     """
+    import json
+    import time
+    from google.genai.errors import APIError
+
     
-    # Extraer nombres de los cursos asignados
     nombres_cursos = [
         c.get("titulo") or c.get("nombre") or str(c) 
         for c in cursos_asignados
     ]
     
     total_cursos = len(nombres_cursos)
-    total_preguntas = total_cursos * 5
+    preguntas_por_curso = 4  
+    total_preguntas = total_cursos * preguntas_por_curso
 
-    # 1. Construcción del Prompt
+    
     prompt = f"""
-    Actúa como un evaluador técnico y académico experto.
+    Actúa como un evaluador técnico y académico experto en {puesto_nombre}.
     
     PUESTO DEL EVALUADO: {puesto_nombre}
     CURSOS COMPLETADOS: {json.dumps(nombres_cursos, ensure_ascii=False)}
 
     TAREA:
-    Genera un examen de opción múltiple para evaluar los conocimientos adquiridos.
-    Debes generar exactamente 5 preguntas por cada uno de los {total_cursos} cursos asignados (Total: {total_preguntas} preguntas).
+    Genera un examen de opción múltiple con nivel profesional para validar los conocimientos adquiridos.
+    Debes generar exactamente {preguntas_por_curso} preguntas técnicas redactadas específicamente por cada uno de los {total_cursos} cursos asignados (Total: {total_preguntas} preguntas).
 
-    REGLAS DE FORMATO:
-    1. "opciones": Debe ser una lista de 4 alternativas de texto.
-    2. "respuesta_correcta": Un número entero entre 0 y 3 indicando el índice de la opción correcta en la lista.
-    3. Retorna ÚNICAMENTE la estructura JSON especificada a continuación:
+    REGLAS ESTRICTAS:
+    1. "pregunta": Debe ser un caso práctico o pregunta técnica concreta sobre el temario del curso.
+    2. "opciones": Debe ser un arreglo con 4 alternativas técnicas REALES y plausibles relacionadas con el tema (NUNCA usar respuestas genéricas como "Opción A", "Concepto A" o "Ninguna de las anteriores").
+    3. "respuesta_correcta": Un número entero entre 0 y 3 indicando el índice de la opción correcta en el arreglo.
+    4. "explicacion": Explicación técnica breve sustentando la respuesta correcta.
+    5. Retorna ÚNICAMENTE la estructura JSON especificada a continuación:
 
     {{
       "titulo": "Evaluación Final de Capacitación",
@@ -139,10 +145,15 @@ def generar_evaluacion_final(puesto_nombre: str, cursos_asignados: list):
         {{
           "id": 1,
           "curso_asociado": "Nombre exacto de uno de los cursos",
-          "pregunta": "¿Texto de la pregunta técnica?",
-          "opciones": ["Opción A", "Opción B", "Opción C", "Opción D"],
-          "respuesta_correcta": 1,
-          "explicacion": "Explicación breve de por qué es la respuesta correcta."
+          "pregunta": "¿Qué mecanismo garantiza la confidencialidad de la firma en un token JWT?",
+          "opciones": [
+            "El algoritmo de hashing HMAC o RSA en la firma",
+            "El cifrado en base64 del Payload",
+            "La inclusión de la clave secreta en los Headers",
+            "La validación automática por parte del navegador"
+          ],
+          "respuesta_correcta": 0,
+          "explicacion": "Los JWT se firman usando un secreto (HMAC) o una clave privada (RSA) para evitar su alteración."
         }}
       ]
     }}
@@ -150,13 +161,12 @@ def generar_evaluacion_final(puesto_nombre: str, cursos_asignados: list):
 
     # 2. Configuración de Reintentos
     max_retries = 3
-    delay = 2
+    delay = 3
 
     for intento in range(max_retries):
         try:
-            # Llamada al modelo Gemini
             response = client.models.generate_content(
-                model="gemini-3.6-flash",
+                model="gemini-3.8-flash",  # O la versión activa de Gemini que utilices
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json"
@@ -167,7 +177,10 @@ def generar_evaluacion_final(puesto_nombre: str, cursos_asignados: list):
             if texto_limpio.startswith("```json"):
                 texto_limpio = texto_limpio.replace("```json", "", 1).rstrip("```").strip()
             
-            return json.loads(texto_limpio)
+            datos_evaluacion = json.loads(texto_limpio)
+            # Validamos que Gemini devuelva preguntas antes de retornar
+            if datos_evaluacion.get("preguntas") and len(datos_evaluacion["preguntas"]) > 0:
+                return datos_evaluacion
 
         except APIError as e:
             if getattr(e, 'code', None) == 503 and intento < max_retries - 1:
@@ -182,20 +195,46 @@ def generar_evaluacion_final(puesto_nombre: str, cursos_asignados: list):
             print(f"Error inesperado al generar examen con IA: {e}")
             break
 
-    # 3. Fallback (Por si falla la IA)
-    print("[IA Fallback Exam] Generando preguntas de respaldo.")
+    # 3. Fallback Mejorado 
+    print("[IA Fallback Exam] Generando preguntas de respaldo técnicas.")
+    preguntas_fallback = []
+    id_counter = 1
+
+    for nombre_curso in nombres_cursos:
+        # Pregunta 1 del curso
+        preguntas_fallback.append({
+            "id": id_counter,
+            "curso_asociado": nombre_curso,
+            "pregunta": f"¿Cuál es el objetivo principal aplicado en el módulo de {nombre_curso}?",
+            "opciones": [
+                f"Establecer buenas prácticas y estándares técnicos en {nombre_curso}.",
+                "Reducir la complejidad de lectura reemplazando arquitecturas.",
+                "Sustituir el uso de bases de datos por archivos locales.",
+                "Aumentar el uso de recursos del servidor sin optimización."
+            ],
+            "respuesta_correcta": 0,
+            "explicacion": f"El estándar principal de {nombre_curso} busca implementar mejores prácticas."
+        })
+        id_counter += 1
+
+        
+        preguntas_fallback.append({
+            "id": id_counter,
+            "curso_asociado": nombre_curso,
+            "pregunta": f"¿Qué beneficio principal aporta la correcta implementación de {nombre_curso} en producción?",
+            "opciones": [
+                "Mayor consumo de ancho de banda.",
+                "Mayor escalabilidad, seguridad y mantenibilidad del software.",
+                "Eliminación total de pruebas unitarias y de integración.",
+                "Desactivación de los registros de auditoría y logs."
+            ],
+            "respuesta_correcta": 1,
+            "explicacion": f"La aplicación de {nombre_curso} promueve código seguro y escalable."
+        })
+        id_counter += 1
+
     return {
-        "titulo": "Evaluación Final (Modo Respaldo)",
-        "total_preguntas": total_preguntas,
-        "preguntas": [
-            {
-                "id": idx + 1,
-                "curso_asociado": nombre_curso,
-                "pregunta": f"Pregunta de validación general sobre: {nombre_curso}",
-                "opciones": ["Concepto básico A", "Concepto correcto B", "Concepto C", "Concepto D"],
-                "respuesta_correcta": 1,
-                "explicacion": "Respuesta generada en modo de contingencia."
-            }
-            for idx, nombre_curso in enumerate(nombres_cursos)
-        ]
+        "titulo": "Evaluación Final de Capacitación",
+        "total_preguntas": len(preguntas_fallback),
+        "preguntas": preguntas_fallback
     }

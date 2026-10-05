@@ -4,25 +4,26 @@ from typing import List, Optional
 import json
 from pydantic import BaseModel
 from dotenv import load_dotenv
-
 from fastapi import Depends, FastAPI, HTTPException, status, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-
+from models import Base, Usuario, XAPIStatement 
 import models
 from database import engine, get_db
 from services.ai_adapter import generar_ruta_aprendizaje, generar_evaluacion_final
+from fastapi import APIRouter, HTTPException, Depends
+from sqlalchemy import func
+from models import Curso  
+from models import Usuario, Diagnostico, ProgresoCurso, XAPIStatement
 
 # Carga de variables de entorno (.env)
 load_dotenv()
 
-# Crear tablas en PostgreSQL si no existen
 models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
 
-# Mapeo CORS para que tu React (localhost:5173) no tenga bloqueos
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -33,7 +34,6 @@ app.add_middleware(
 
 router = APIRouter()
 
-# --- ESQUEMAS DE PYDANTIC ---
 
 class UserRegister(BaseModel):
     nombre: str
@@ -89,138 +89,38 @@ class ResultadoExamenSchema(BaseModel):
     aprobado: bool
     intentos_restantes: int
 
-# --- DATOS ESTÁTICOS / SIMULADOS EN MEMORIA ---
+class XAPIStatementCreate(BaseModel):
+    usuario_id: Optional[int] = None
+    verb: str
+    object_id: str
+    statement_json: Optional[dict] = {}
 
-DB_PERFILES = {
-    "departamentos": [
-        {"id": "tecnologia", "nombre": "Desarrollo de Software"},
-        {"id": "ventas", "nombre": "Administración y Ventas"},
-    ],
-    "puestos": {
-        "tecnologia": [
-            {"id": "dev", "nombre": "Desarrollador Backend"},
-        ],
-        "ventas": [
-            {"id": "recruiter", "nombre": "Especialista en Marketing Digital"},
-        ]
-    }
-}
+class PreguntaCreateRequest(BaseModel):
+    puesto: str
+    texto: str
+    opciones: List[str]
+    opcion_correcta: int
+    categoria: Optional[str] = "General"
+    
+PreguntaCreate = PreguntaCreateRequest
 
-DB_EXAMENES = {
-    "dev": {
-        "titulo": "Evaluación Diagnóstica: Desarrollador Backend",
-        "duracion_minutos": 10,
-        "preguntas": [
-            {
-                "id": 1,
-                "texto": "¿Cuál es tu nivel global de experiencia en desarrollo de software?",
-                "opciones": [
-                    "1. Trainee / Junior (0-1 años)",
-                    "2. Mid-level (2-4 años)",
-                    "3. Senior (5+ años)"
-                ]
-            },
-            {
-                "id": 2,
-                "texto": "¿Cuál es tu nivel de dominio en la creación y arquitectura de servidores Backend?",
-                "opciones": [
-                    "1. Básico (Scripts simples o controladores básicos)",
-                    "2. Intermedio (APIs REST con FastAPI, Express o Django)",
-                    "3. Avanzado (Patrones de diseño, Microservicios y Async I/O)",
-                    "4. Experto (Arquitecturas distribuidas, Event-Driven y Alta Disponibilidad)"
-                ]
-            },
-            {
-                "id": 3,
-                "texto": "¿Qué tan familiarizado estás con la creación, consumo y seguridad de APIs REST?",
-                "opciones": [
-                    "1. Solo las he consumido desde el Frontend",
-                    "2. He creado APIs básicas y rutas simples",
-                    "3. Diseño arquitecturas REST estructuradas con autenticación (JWT/OAuth)",
-                    "4. Manejo optimización, seguridad avanzada, rate limiting y documentación OpenAPI"
-                ]
-            },
-            {
-                "id": 4,
-                "texto": "¿Cómo ha sido tu experiencia gestionando bases de datos en proyectos reales?",
-                "opciones": [
-                    "1. Poca interacción / Solo teoría",
-                    "2. Consultas intermedias (CRUD y consultas simples)",
-                    "3. Modelado de tablas, relaciones (3FN) y uso de ORMs (SQLAlchemy, Prisma)",
-                    "4. Optimización de consultas complejas, indexación y migración de datos"
-                ]
-            },
-            {
-                "id": 5,
-                "texto": "¿Cuál es tu flujo habitual para asegurar la calidad de tu código y entrega continua?",
-                "opciones": [
-                    "1. Uso básico de Git y revisiones manuales",
-                    "2. Manejo fluido de Git (branches, PRs) y pruebas unitarias básicas",
-                    "3. Escribo pruebas automatizadas (TDD) e integro pipelines de CI/CD",
-                    "4. Diseño estrategias globales de arquitectura, testing y entrega continua"
-                ]
-            }
-        ]
-    },
-    "recruiter": {
-        "titulo": "Evaluación Diagnóstica: Especialista en Marketing Digital",
-        "duracion_minutos": 10,
-        "preguntas": [
-            {
-                "id": 1,
-                "texto": "¿En qué área de marketing digital tienes mayor experiencia técnica?",
-                "opciones": [
-                    "1. Redes Sociales y Creación de Contenido (Orgánico)",
-                    "2. Publicidad Pagada (Meta Ads, Google Ads)",
-                    "3. SEO y Posicionamiento en Buscadores",
-                    "4. Estrategia Inbound, Email Marketing y Embudos completos"
-                ]
-            },
-            {
-                "id": 2,
-                "texto": "¿Cómo interpretas las métricas de rendimiento en tus campañas?",
-                "opciones": [
-                    "1. Reviso métricas básicas (Likes, Alcance, Clics)",
-                    "2. Configuro píxeles de seguimiento y mido conversiones (CPA, CTR)",
-                    "3. Analizo el retorno de inversión completo (ROAS, CAC, LTV) en Google Analytics",
-                    "4. Construyo dashboards automatizados (Looker Studio/Power BI) para decisiones estratégicas"
-                ]
-            },
-            {
-                "id": 3,
-                "texto": "¿Qué nivel de experiencia tienes usando plataformas de CRM o automatización?",
-                "opciones": [
-                    "1. Ninguno / Solo listas de correo sencillas",
-                    "2. Uso básico de CRM (Mailchimp, HubSpot) para envíos masivos",
-                    "3. Creo secuencias de nutrición de leads y segmentaciones automáticas",
-                    "4. Integro flujos complejos entre campañas, CRM y herramientas No-Code (Zapier/Make)"
-                ]
-            },
-            {
-                "id": 4,
-                "texto": "¿Cómo abordas la mejora continua de tus contenidos o anuncios?",
-                "opciones": [
-                    "1. Cambio el texto o la imagen de manera intuitiva cuando no funciona",
-                    "2. Realizo pruebas A/B sencillas en anuncios o páginas",
-                    "3. Diseño experimentos basados en hipótesis y análisis del comportamiento del usuario",
-                    "4. Optimizo embudos completos mediante CRO (Conversion Rate Optimization) y UX copywriting"
-                ]
-            },
-            {
-                "id": 5,
-                "texto": "¿Cuál es tu experiencia administrando presupuestos de inversión publicitaria?",
-                "opciones": [
-                    "1. Sin experiencia en presupuestos de pauta",
-                    "2. Presupuestos pequeños (menos de $500 USD/mes)",
-                    "3. Presupuestos medianos y gestión directa de pauta escalar ($500 a $5,000 USD/mes)",
-                    "4. Estrategias omnicanal con presupuestos elevados y optimización de capital"
-                ]
-            }
-        ]
-    }
-}
+class RespuestaColaborador(BaseModel):
+    pregunta_id: int
+    opcion_seleccionada: int
 
-# --- RUTAS DE AUTENTICACIÓN Y PERFILES ---
+class EvaluarDiagnosticoRequest(BaseModel):
+    usuario_id: int
+    puesto_id: str
+    respuestas: List[RespuestaColaborador]
+
+class PuestoCreate(BaseModel):
+    nombre: str
+
+class DepartamentoCreate(BaseModel):
+    nombre: str
+    descripcion: Optional[str] = None
+    puestos: Optional[List[str]] = []
+    
 
 @app.get("/")
 def home():
@@ -277,41 +177,92 @@ def login(data: LoginData, db: Session = Depends(get_db)):
         }
     }
 
-@app.get("/api/perfiles")
-def obtener_perfiles():
-    return DB_PERFILES
+@app.get("/api/usuarios/simulador")
+def obtener_usuarios_simulador(db: Session = Depends(get_db)):
+    try:
+        
+        puestos_db = db.query(models.Puesto).all()
+        puestos_map = {str(p.id): p.nombre for p in puestos_db}
 
-@app.post("/api/diagnostico/iniciar")
-def iniciar_diagnostico(data: DiagnosticoData):
-    exam = DB_EXAMENES.get(data.puesto)
-    if not exam:
-        raise HTTPException(status_code=404, detail="No hay examen disponible para este puesto.")
+        
+        usuarios = db.query(models.Usuario).all()
+        resultado = []
+        
+        for u in usuarios:
+            
+            val_puesto = getattr(u, 'puesto', None) or getattr(u, 'puesto_id', None)
+            val_puesto_str = str(val_puesto) if val_puesto is not None else ""
+
+            nombre_puesto = puestos_map.get(val_puesto_str, val_puesto_str or "Sin puesto")
+
+            resultado.append({
+                "id": u.id,
+                "nombre": u.nombre,
+                "email": u.email,
+                "rol": getattr(u, 'rol', 'empleado'),
+                "departamento": getattr(u, 'departamento', ''),
+                "puesto": val_puesto,
+                "puesto_nombre": nombre_puesto
+            })
+            
+        return resultado
+
+    except Exception as e:
+        print("Error en /api/usuarios/simulador:", e)
+        # Si ocurre cualquier error, devolvemos un listado simple para evitar el error 500
+        usuarios_fallaback = db.query(models.Usuario).all()
+        return [
+            {
+                "id": u.id,
+                "nombre": u.nombre,
+                "email": u.email,
+                "rol": getattr(u, 'rol', 'empleado'),
+                "puesto": getattr(u, 'puesto', ''),
+                "puesto_nombre": getattr(u, 'puesto', '')
+            }
+            for u in usuarios_fallaback
+        ]
     
+@app.get("/api/perfiles")
+def obtener_perfiles(db: Session = Depends(get_db)):
+    departamentos = db.query(Departamento).all()
+    
+    lista_deptos = []
+    puestos_dict = {}
+
+    for dep in departamentos:
+        lista_deptos.append({"id": str(dep.id), "nombre": dep.nombre})
+        puestos_dict[str(dep.id)] = [
+            {"id": str(p.id), "nombre": p.nombre} for p in dep.puestos
+        ]
+
     return {
-        "status": "ok",
-        "sesion_id": "SESION-88492",
-        "examen": exam
+        "departamentos": lista_deptos,
+        "puestos": puestos_dict
     }
 
-# --- GENERACIÓN DE RUTAS E INTELIGENCIA ARTIFICIAL ---
 
 @app.post("/api/rutas/generar-ia")
 def generar_ruta_ia(payload: dict, db: Session = Depends(get_db)):
-    puesto_id_str = str(payload.get("puesto_id", "dev"))
+    puesto_id = payload.get("puesto_id")
     usuario_id = payload.get("usuario_id") 
 
-    nombres_puestos = {
-        "dev": "Desarrollador Backend",
-        "recruiter": "Especialista en Marketing Digital"
-    }
-    puesto_nombre = nombres_puestos.get(puesto_id_str, puesto_id_str)
+    if not puesto_id:
+        raise HTTPException(status_code=400, detail="El 'puesto_id' es requerido.")
 
-    # 1. Obtener cursos desde PostgreSQL
-    cursos_db = db.query(models.Curso).filter(models.Curso.puesto_id == puesto_id_str).all()
+   
+    puesto_db = db.query(models.Puesto).filter(models.Puesto.id == puesto_id).first()
+    
+    if puesto_db:
+        puesto_nombre = puesto_db.nombre
+    else:
+        puesto_nombre = f"Puesto #{puesto_id}"
+
+    cursos_db = db.query(models.Curso).filter(models.Curso.puesto_id == str(puesto_id)).all()
+    
     if not cursos_db:
         cursos_db = db.query(models.Curso).all()
 
-    # 2. Convertir lista de objetos a diccionarios
     catalogo_cursos = [
         {
             "id": c.id,
@@ -327,7 +278,6 @@ def generar_ruta_ia(payload: dict, db: Session = Depends(get_db)):
         for c in cursos_db
     ]
 
-    # 3. Invocar al motor de Gemini mediante ai_adapter
     try:
         resultado_ia = generar_ruta_aprendizaje(
             puesto_nombre=puesto_nombre,
@@ -352,7 +302,6 @@ def generar_ruta_ia(payload: dict, db: Session = Depends(get_db)):
             ]
         }
 
-    # 4. Guardar SOLO la Ruta de Aprendizaje en PostgreSQL
     nueva_ruta = None
     if usuario_id:
         try:
@@ -405,7 +354,6 @@ def guardar_diagnostico(data: GuardarDiagnosticoRequest, db: Session = Depends(g
         }
     }
 
-# --- GESTIÓN DE CURSOS ---
 
 @app.post("/api/cursos", status_code=status.HTTP_201_CREATED)
 def crear_curso(curso: CursoCreate, db: Session = Depends(get_db)):
@@ -454,7 +402,6 @@ def obtener_ruta_usuario(usuario_id: int, db: Session = Depends(get_db)):
     if not ruta:
         raise HTTPException(status_code=404, detail="El usuario no tiene una ruta de aprendizaje guardada.")
 
-    # 2. Consultar el diagnóstico
     diagnostico = db.query(models.Diagnostico)\
                     .filter(models.Diagnostico.usuario_id == usuario_id)\
                     .order_by(models.Diagnostico.id.desc())\
@@ -462,16 +409,13 @@ def obtener_ruta_usuario(usuario_id: int, db: Session = Depends(get_db)):
 
     puntaje_obtenido = diagnostico.score if diagnostico and diagnostico.score is not None else 0
 
-    # 3. Obtener catálogo de la BD para asociar URLs reales a cada curso dinámicamente
     todos_los_cursos = db.query(models.Curso).all()
     
-    # Mapeo por título en minúsculas para encontrar coincidencias fácilmente
     mapa_urls = {
         c.titulo.strip().lower(): c.url_contenido 
         for c in todos_los_cursos if c.titulo and c.url_contenido
     }
 
-    # 4. Extraer el arreglo de cursos guardado en el JSON
     datos_json = ruta.orden_secuencia_json or {}
     
     if isinstance(datos_json, dict):
@@ -481,12 +425,10 @@ def obtener_ruta_usuario(usuario_id: int, db: Session = Depends(get_db)):
     else:
         lista_cursos_raw = []
 
-    # 5. Enriquecer cada curso de la lista con su URL de la base de datos
     cursos_enriquecidos = []
     for curso in lista_cursos_raw:
         if isinstance(curso, dict):
             titulo = (curso.get("nombre") or curso.get("titulo") or "").strip()
-            # Buscar coincidencia exacta o parcial de título en la tabla de Cursos
             url_hallada = curso.get("url_contenido")
             if not url_hallada:
                 for t_db, url_db in mapa_urls.items():
@@ -518,7 +460,6 @@ def obtener_ruta_usuario(usuario_id: int, db: Session = Depends(get_db)):
         "ruta": cursos_enriquecidos
     }
 
-# --- TRACKING DE PROGRESO Y FORMATO xAPI ---
 
 def generar_xapi_statement(usuario, curso, estatus: str, calificacion: float = None):
     verbos_xapi = {
@@ -573,17 +514,7 @@ def generar_xapi_statement(usuario, curso, estatus: str, calificacion: float = N
 def actualizar_progreso(payload: dict, db: Session = Depends(get_db)):
     usuario_id = payload.get("id_usuario")
     curso_id = payload.get("id_curso")
-    accion = payload.get("accion")  # Viene como 'launched' o 'completed' desde el frontend
-    
-    # 1. Mapeamos la acción xAPI al estatus correspondiente para la BD
-    if accion == "completed":
-        nuevo_estatus = "completado"
-    elif accion == "launched":
-        nuevo_estatus = "En progreso"
-    else:
-        # Fallback por si envían el estatus directamente
-        nuevo_estatus = payload.get("estatus", "En progreso")
-
+    accion = payload.get("accion")  
     calificacion = payload.get("calificacion", None)
 
     if not usuario_id or not curso_id:
@@ -595,55 +526,79 @@ def actualizar_progreso(payload: dict, db: Session = Depends(get_db)):
     if not usuario or not curso:
         raise HTTPException(status_code=404, detail="Usuario o Curso no encontrado.")
 
-    progreso = db.query(models.ProgresoCurso).filter(
-        models.ProgresoCurso.id_usuario == usuario_id,
-        models.ProgresoCurso.id_curso == curso_id
+    if accion == "completed":
+        nuevo_estatus = "completado"
+        verb_id = "http://adlnet.gov/expapi/verbs/completed"
+        verb_display = {"en-US": "completed", "es-ES": "completó"}
+    else:
+        nuevo_estatus = payload.get("estatus", "En progreso")
+        verb_id = "http://adlnet.gov/expapi/verbs/launched"
+        verb_display = {"en-US": "inició"}
+
+    progreso_model = getattr(models, "ProgresoCurso", getattr(models, "Progreso", None))
+    progreso = db.query(progreso_model).filter(
+        progreso_model.id_usuario == usuario_id,
+        progreso_model.id_curso == curso_id
     ).first()
 
     if progreso:
         progreso.estatus = nuevo_estatus
-        if calificacion is not None:
+        if hasattr(progreso, "calificacion") and calificacion is not None:
             progreso.calificacion = calificacion
     else:
-        progreso = models.ProgresoCurso(
-            id_usuario=usuario_id,
-            id_curso=curso_id,
-            estatus=nuevo_estatus,
-            calificacion=calificacion
-        )
+        kwargs = {
+            "id_usuario": usuario_id,
+            "id_curso": curso_id,
+            "estatus": nuevo_estatus
+        }
+        if hasattr(progreso_model, "calificacion"):
+            kwargs["calificacion"] = calificacion
+
+        progreso = progreso_model(**kwargs)
         db.add(progreso)
 
     db.commit()
-    db.refresh(progreso)
 
-    xapi_statement = generar_xapi_statement(usuario, curso, nuevo_estatus, calificacion)
+    xapi_statement = {
+        "actor": {
+            "objectType": "Agent",
+            "name": usuario.nombre,
+            "mbox": f"mailto:{getattr(usuario, 'email', None) or f'usuario{usuario.id}@empresa.com'}"
+        },
+        "verb": {"id": verb_id, "display": verb_display},
+        "object": {
+            "objectType": "Activity",
+            "id": curso.url_contenido or f"http://empresa.com/cursos/{curso.id}",
+            "definition": {
+                "name": {"es-ES": curso.titulo},
+                "description": {"es-ES": f"Capacitación en {curso.titulo}"},
+                "type": "http://adlnet.gov/expapi/activities/course"
+            }
+        },
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
 
     return {
         "status": "ok",
         "mensaje": "Progreso actualizado correctamente",
-        "progreso": {
-            "id_progreso": progreso.id_progreso,
-            "id_usuario": progreso.id_usuario,
-            "id_curso": progreso.id_curso,
-            "estatus": progreso.estatus,
-            "calificacion": progreso.calificacion
-        },
+        "estatus_actual": nuevo_estatus,
         "xapi_statement": xapi_statement
     }
 
 @app.get("/api/progreso/usuario/{usuario_id}")
 def obtener_progreso_usuario(usuario_id: int, db: Session = Depends(get_db)):
-    progresos = db.query(models.ProgresoCurso).filter(models.ProgresoCurso.id_usuario == usuario_id).all()
+    progreso_model = getattr(models, "ProgresoCurso", getattr(models, "Progreso", None))
+    progresos = db.query(progreso_model).filter(progreso_model.id_usuario == usuario_id).all()
     
     return {
         "status": "ok",
         "usuario_id": usuario_id,
         "progresos": [
             {
-                "id_progreso": p.id_progreso,
+                "id_progreso": getattr(p, "id_progreso", getattr(p, "id", None)),
                 "id_curso": p.id_curso,
                 "estatus": p.estatus,
-                "calificacion": p.calificacion
+                "calificacion": getattr(p, "calificacion", None)
             }
             for p in progresos
         ]
@@ -651,14 +606,11 @@ def obtener_progreso_usuario(usuario_id: int, db: Session = Depends(get_db)):
 
 from fastapi import Depends
 from sqlalchemy.orm import Session
-# Asegúrate de importar también get_db, Diagnostico y tu modelo si los tienes en otros módulos
-
-# Archivo: main.py (o tu archivo de rutas en FastAPI)
 
 @app.get("/api/diagnostico/ultimo/{usuario_id}")
 async def obtener_ultimo_diagnostico(usuario_id: int, db: Session = Depends(get_db)):
     try:
-        # Solo usamos 'score' porque esa es la columna real en PostgreSQL
+    
         query = text("""
             SELECT * FROM diagnosticos 
             WHERE usuario_id = :usuario_id AND score > 0
@@ -674,12 +626,10 @@ async def obtener_ultimo_diagnostico(usuario_id: int, db: Session = Depends(get_
         return dict(resultado._mapping)
     except Exception as e:
         print(f"Error en diagnostico/ultimo: {e}")
-        # Retornamos score 0 en lugar de crashar la app con status 500
         return {"mensaje": "Error en servidor", "score": 0}
     
 @app.get("/api/diagnostico/usuario/{usuario_id}")
 def obtener_diagnosticos_usuario(usuario_id: int, db: Session = Depends(get_db)):
-    # Busca si el usuario ya tiene diagnósticos en PostgreSQL
     registros = db.query(models.Diagnostico).filter(models.Diagnostico.usuario_id == usuario_id).all()
     return registros
 
@@ -699,87 +649,6 @@ def obtener_todos_los_cursos(db: Session = Depends(get_db)):
         for c in cursos
     ]
     
-@app.post("/api/progreso/actualizar")
-def registrar_progreso_xapi(data: ProgresoUpdate, db: Session = Depends(get_db)):
-    # 1. Verificar existencia de usuario y curso en la BD
-    usuario = db.query(models.Usuario).filter(models.Usuario.id == data.id_usuario).first()
-    curso = db.query(models.Curso).filter(models.Curso.id == data.id_curso).first()
-
-    if not usuario or not curso:
-        raise HTTPException(status_code=404, detail="Usuario o Curso no encontrado")
-
-    # 2. Configurar Verbo y Estatus según la acción recibida
-    if data.accion == "completed":
-        verb_id = "http://adlnet.gov/expapi/verbs/completed"
-        verb_display = {"en-US": "completed", "es-ES": "completó"}
-        estatus_bd = "Completado"
-    else:
-        verb_id = "http://adlnet.gov/expapi/verbs/launched"
-        verb_display = {"en-US": "launched", "es-ES": "inició"}
-        estatus_bd = "En progreso"
-
-    # 3. Construir el Statement xAPI Oficial
-    xapi_statement = {
-        "actor": {
-            "objectType": "Agent",
-            "name": usuario.nombre,
-            "mbox": f"mailto:{getattr(usuario, 'email', None) or f'usuario{usuario.id}@empresa.com'}"
-        },
-        "verb": {
-            "id": verb_id,
-            "display": verb_display
-        },
-        "object": {
-            "objectType": "Activity",
-            "id": curso.url_contenido or f"http://empresa.com/cursos/{curso.id}",
-            "definition": {
-                "name": {"es-ES": curso.titulo},
-                "description": {"es-ES": f"Capacitación en {curso.titulo}"},
-                "type": "http://adlnet.gov/expapi/activities/course"
-            }
-        },
-        "timestamp": datetime.utcnow().isoformat() + "Z"
-    }
-
-    # 4. Actualizar o Crear el registro de Progreso en PostgreSQL
-    progreso = db.query(models.Progreso).filter(
-        models.Progreso.id_usuario == data.id_usuario,
-        models.Progreso.id_curso == data.id_curso
-    ).first()
-
-    if not progreso:
-        progreso = models.Progreso(
-            id_usuario=data.id_usuario,
-            id_curso=data.id_curso,
-            estatus=estatus_bd,
-            fecha_inicio=datetime.utcnow()
-        )
-        db.add(progreso)
-    else:
-        progreso.estatus = estatus_bd
-        if data.accion == "completed":
-            progreso.fecha_completado = datetime.utcnow()
-
-    db.commit()
-
-    print(f"✅ xAPI Statement [{data.accion.upper()}]:", json.dumps(xapi_statement, indent=2))
-
-    return {
-        "status": "ok",
-        "estatus_actual": estatus_bd,
-        "statement": xapi_statement
-    }
-
-@app.get("/api/progreso/usuario/{usuario_id}")
-def obtener_progreso_usuario(usuario_id: int, db: Session = Depends(get_db)):
-    progresos = db.query(models.Progreso).filter(models.Progreso.id_usuario == usuario_id).all()
-    return [
-        {
-            "id_curso": p.id_curso,
-            "estatus": p.estatus
-        }
-        for p in progresos
-    ]
 
 @app.post("/api/evaluaciones/generar")
 def api_generar_evaluacion(payload: dict, db: Session = Depends(get_db)):
@@ -788,7 +657,6 @@ def api_generar_evaluacion(payload: dict, db: Session = Depends(get_db)):
     if not usuario_id:
         raise HTTPException(status_code=400, detail="usuario_id es requerido.")
 
-    # 1. Buscar la ruta en la base de datos usando la columna correcta id_usuario
     ruta_guardada = db.query(models.RutaAprendizaje).filter(
         models.RutaAprendizaje.id_usuario == usuario_id
     ).first()
@@ -799,7 +667,6 @@ def api_generar_evaluacion(payload: dict, db: Session = Depends(get_db)):
     if ruta_guardada:
         puesto = getattr(ruta_guardada, "puesto", None) or "Colaborador"
         
-        # Intentar obtener los cursos del objeto encontrado
         cursos_raw = (
             getattr(ruta_guardada, "ruta", None) or 
             getattr(ruta_guardada, "recomendaciones", None) or 
@@ -820,7 +687,6 @@ def api_generar_evaluacion(payload: dict, db: Session = Depends(get_db)):
             if isinstance(cursos, dict):
                 cursos = cursos.get("ruta") or cursos.get("cursos") or []
 
-    # 2. Si no se encontraron cursos en la BD, tomar los que envía el frontend como respaldo
     if not cursos and payload.get("cursos"):
         cursos = payload.get("cursos")
 
@@ -841,8 +707,7 @@ def api_generar_evaluacion(payload: dict, db: Session = Depends(get_db)):
         "evaluacion": examen_generado
     }
 
-# 1. Endpoint para GUARDAR el resultado en PostgreSQL
-@router.post("/api/evaluaciones/guardar-resultado")
+@app.post("/api/evaluaciones/guardar-resultado")
 async def guardar_resultado(datos: ResultadoExamenSchema, db: Session = Depends(get_db)):
     try:
         query = text("""
@@ -868,21 +733,19 @@ async def guardar_resultado(datos: ResultadoExamenSchema, db: Session = Depends(
         raise HTTPException(status_code=500, detail="Error al guardar el resultado en la base de datos")
 
 
-# 2. Endpoint para CONSULTAR el último examen presentado en PostgreSQL
-@router.get("/api/evaluaciones/ultimo/{usuario_id}")
+@app.get("/api/evaluaciones/ultimo/{usuario_id}")
 async def obtener_ultimo_examen(usuario_id: int, db: Session = Depends(get_db)):
     try:
         query = text("""
             SELECT id, usuario_id, puntaje, aciertos, total_preguntas, aprobado, intentos_restantes
             FROM evaluaciones_resultados 
             WHERE usuario_id = :usuario_id 
-            ORDER BY fecha_evaluacion DESC 
+            ORDER BY id DESC 
             LIMIT 1
         """)
         
         resultado = db.execute(query, {"usuario_id": usuario_id}).fetchone()
 
-        # Si el usuario NO tiene ningún examen registrado aún:
         if not resultado:
             return {
                 "id": None,
@@ -894,7 +757,6 @@ async def obtener_ultimo_examen(usuario_id: int, db: Session = Depends(get_db)):
                 "intentos_restantes": 3
             }
 
-        # Si SÍ tiene examen guardado:
         return {
             "id": resultado.id,
             "usuario_id": resultado.usuario_id,
@@ -906,9 +768,413 @@ async def obtener_ultimo_examen(usuario_id: int, db: Session = Depends(get_db)):
         }
     except Exception as e:
         print(f"Error al obtener evaluación: {e}")
-        raise HTTPException(status_code=500, detail="Error interno al obtener evaluación")
+        return {
+            "id": None,
+            "usuario_id": usuario_id,
+            "puntaje": 0,
+            "aciertos": 0,
+            "total_preguntas": 0,
+            "aprobado": False,
+            "intentos_restantes": 3
+        }
+        
+@app.get("/api/xapi/statements")
+def obtener_xapi_statements(usuario_id: Optional[int] = None, db: Session = Depends(get_db)):
+    query = db.query(XAPIStatement)
+    if usuario_id is not None:
+        query = query.filter(XAPIStatement.usuario_id == usuario_id)
+        
+    statements = query.order_by(XAPIStatement.timestamp.desc()).all()
+    usuarios_map = {u.id: u.nombre for u in db.query(models.Usuario).all()}
+    cursos_map = {c.id: c.titulo for c in db.query(models.Curso).all()}
+    
+    resultado = []
+    for st in statements:
+        nombre_usuario = usuarios_map.get(st.usuario_id, f"Usuario #{st.usuario_id}") if st.usuario_id else "Anónimo"
+        verb_clean = (st.verb or "").lower()
+        if "completed" in verb_clean or "completó" in verb_clean:
+            accion_es = "Completado"
+        elif "launched" in verb_clean or "inició" in verb_clean:
+            accion_es = "Iniciado"
+        else:
+            accion_es = st.verb.capitalize() if st.verb else "Interactuó"
+
+       
+        obj_str = str(st.object_id or "")
+        nombre_curso = obj_str
+        if "curso-" in obj_str:
+            try:
+                c_id = int(obj_str.split("curso-")[-1])
+                nombre_curso = cursos_map.get(c_id, obj_str)
+            except ValueError:
+                pass
+        elif obj_str.isdigit():
+            c_id = int(obj_str)
+            nombre_curso = cursos_map.get(c_id, obj_str)
+
+        resultado.append({
+            "id": st.id,
+            "usuario_id": st.usuario_id,
+            "usuario_nombre": nombre_usuario,
+            "verbo": accion_es,
+            "objeto": nombre_curso,
+            "detalles": st.statement_json,
+            "marca_tiempo": st.timestamp.isoformat() if st.timestamp else None
+        })
+        
+    return resultado
+
+@app.post("/api/xapi/statements")
+def registrar_xapi_statement(data: XAPIStatementCreate, db: Session = Depends(get_db)):
+    try:
+        nuevo_statement = XAPIStatement(
+            usuario_id=data.usuario_id,
+            verb=data.verb,
+            object_id=data.object_id,
+            statement_json=data.statement_json,
+            timestamp=datetime.now(timezone.utc)
+        )
+        db.add(nuevo_statement)
+        db.commit()
+        db.refresh(nuevo_statement)
+        return {"status": "ok", "mensaje": "Statement xAPI registrado con éxito", "id": nuevo_statement.id}
+    except Exception as e:
+        db.rollback()
+        print(f"Error guardando xAPI statement: {e}")
+        return {"status": "ok", "mensaje": "Statement procesado"}
+   
+@app.post("/api/admin/preguntas")
+def crear_pregunta_diagnostico(data: PreguntaCreate, db: Session = Depends(get_db)):
+    try:
+        nueva_p = models.PreguntaDiagnostico(
+            puesto_id=data.puesto_id,
+            pregunta=data.pregunta,
+            opciones=data.opciones,
+            opcion_correcta=data.opcion_correcta,
+            categoria=data.categoria
+        )
+        db.add(nueva_p)
+        db.commit()
+        db.refresh(nueva_p)
+        return {"status": "ok", "mensaje": "Pregunta guardada con éxito", "id": nueva_p.id}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error al guardar la pregunta: {str(e)}")
+
+@app.get("/api/evaluaciones/diagnostico/{puesto_id}")
+def obtener_preguntas_por_puesto(puesto_id: str, db: Session = Depends(get_db)):
+    preguntas = db.query(models.Pregunta).filter(
+        models.Pregunta.puesto == puesto_id
+    ).all()
+    
+    return {
+        "status": "ok",
+        "puesto_id": puesto_id,
+        "total": len(preguntas),
+        "preguntas": [
+            {
+                "id": p.id,
+                "pregunta": p.texto,       
+                "opciones": p.opciones,    
+                "categoria": p.categoria
+            }
+            for p in preguntas
+        ]
+    }
+    
+@app.post("/api/admin/preguntas/crear")
+def crear_pregunta_rh(data: PreguntaCreateRequest, db: Session = Depends(get_db)):
+    try:
+        nueva_p = models.Pregunta(
+            puesto=data.puesto,
+            texto=data.texto,
+            opciones=data.opciones,
+            opcion_correcta=data.opcion_correcta,
+            categoria=data.categoria
+        )
+        db.add(nueva_p)
+        db.commit()
+        db.refresh(nueva_p)
+
+        return {
+            "status": "ok",
+            "mensaje": "Pregunta guardada correctamente",
+            "id": nueva_p.id
+        }
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Error al guardar la pregunta: {str(e)}"
+        )
+        
+@app.post("/api/evaluaciones/diagnostico/evaluar")
+def evaluar_diagnostico_dinamico(data: EvaluarDiagnosticoRequest, db: Session = Depends(get_db)):
+    aciertos = 0
+    total = len(data.respuestas)
+    
+    if total == 0:
+        raise HTTPException(status_code=400, detail="No se enviaron respuestas para la evaluación.")
+
+    for resp in data.respuestas:
+        pregunta_db = db.query(models.Pregunta).filter(
+            models.Pregunta.id == resp.pregunta_id
+        ).first()
+        
+        if pregunta_db and pregunta_db.opcion_correcta == resp.opcion_seleccionada:
+            aciertos += 1
+
+    score_final = int((aciertos / total) * 100)
+
+    nuevo_diag = models.Diagnostico(
+        usuario_id=data.usuario_id,
+        puesto_evaluado=data.puesto_id,
+        score=score_final
+    )
+    db.add(nuevo_diag)
+    db.commit()
+    db.refresh(nuevo_diag)
+
+    try:
+        nuevo_st = models.XAPIStatement(
+            usuario_id=data.usuario_id,
+            verb="completed",
+            object_id=f"evaluacion-diagnostica-{data.puesto_id}",
+            statement_json={
+                "evaluacion": "Diagnóstico Inicial de Puesto",
+                "score": score_final,
+                "aciertos": aciertos,
+                "total": total
+            },
+            timestamp=datetime.now(timezone.utc)
+        )
+        db.add(nuevo_st)
+        db.commit()
+    except Exception as e:
+        print(f"Error registrando statement xAPI: {e}")
+
+    return {
+        "status": "ok",
+        "diagnostico_id": nuevo_diag.id,
+        "score": score_final,
+        "aciertos": aciertos,
+        "total_preguntas": total
+    }
+
+import unicodedata
+def limpiar_texto(texto: str) -> str:
+    """Remueve acentos, convierte a minúsculas y elimina espacios extra."""
+    if not texto:
+        return "sin asignar"
+    texto_norm = unicodedata.normalize('NFD', texto)
+    texto_sin_acentos = ''.join(c for c in texto_norm if unicodedata.category(c) != 'Mn')
+    return texto_sin_acentos.strip().lower()
 
 
-# ¡¡AQUÍ ESTÁ LA CLAVE QUE FALTABA!!
-# Se incluye el router registrado en la instancia principal de FastAPI
+@app.get("/api/admin/metrics", tags=["Admin"])
+def obtener_metricas_admin(db: Session = Depends(get_db)):
+    try:
+        # 1. Total de empleados 
+        total_empleados = db.query(models.Usuario).filter(models.Usuario.rol == 'empleado').count()
+
+        # 2. Promedio general de Puntaje Diagnóstico 
+        promedio_diag = db.query(func.avg(models.Diagnostico.score)).scalar() or 0.0
+
+        # 3. Total de Cursos Completados
+        total_cursos_completados = db.query(models.ProgresoCurso).filter(
+            func.lower(models.ProgresoCurso.estatus).in_(['completado', 'completed'])
+        ).count()
+
+        # 4. Tasa de Aprobación vía xAPI
+        total_evaluaciones = db.query(models.XAPIStatement).count()
+        aprobados_eval = db.query(models.XAPIStatement).filter(
+            models.XAPIStatement.verb.in_(['passed', 'completed'])
+        ).count()
+        
+        tasa_aprobacion = round((aprobados_eval / total_evaluaciones * 100), 1) if total_evaluaciones > 0 else 0.0
+
+      ## 5. Promedio de Diagnóstico agrupado por Departamento 
+        diag_por_depto_raw = db.query(
+            models.Usuario.departamento,
+            models.Diagnostico.score
+        ).join(models.Diagnostico, models.Usuario.id == models.Diagnostico.usuario_id).all()
+
+        # Agrupamos en Python para unificar sin importar acentos/mayúsculas
+        agrupado = {}
+        for dep, score in diag_por_depto_raw:
+            dep_limpio = limpiar_texto(dep)
+            if dep_limpio not in agrupado:
+                agrupado[dep_limpio] = []
+            if score is not None:
+                agrupado[dep_limpio].append(score)
+
+        # Formateamos con nombres limpios y bonitos para React
+        grafico_departamentos = [
+            {
+                "departamento": dep_key.capitalize(),  
+                "promedio": round(sum(scores) / len(scores), 1) if scores else 0.0
+            }
+            for dep_key, scores in agrupado.items()
+        ]
+
+        # 6. Estatus Global de Cursos
+        total_asignaciones = db.query(models.ProgresoCurso).count()
+        pendientes = max(0, total_asignaciones - total_cursos_completados)
+
+        grafico_estatus_cursos = [
+            {"name": "Completados", "value": total_cursos_completados},
+            {"name": "Pendientes / En Curso", "value": pendientes}
+        ]
+        
+        # 7. Distribución por Puesto
+        puestos_raw = db.query(
+            models.Usuario.puesto,
+            func.count(models.Usuario.id)
+        ).group_by(models.Usuario.puesto).all()
+
+        grafico_puestos = [
+            {"puesto": p if p else "Sin Especificar", "cantidad": cant}
+            for p, cant in puestos_raw
+        ]
+
+        # 8. Evolución del Aprendizaje en el Tiempo (xAPI por mes)
+        evolucion_raw = db.query(
+            func.to_char(models.XAPIStatement.timestamp, 'YYYY-MM').label("mes"),
+            func.count(models.XAPIStatement.id).label("total")
+        ).group_by("mes").order_by("mes").all()
+
+        grafico_evolucion = [
+            {"mes": mes if mes else "Sin Fecha", "actividades": total}
+            for mes, total in evolucion_raw
+        ]
+
+        return {
+            "kpis": {
+                "total_empleados": total_empleados,
+                "promedio_diagnostico": round(promedio_diag, 1),
+                "cursos_completados": total_cursos_completados,
+                "tasa_aprobacion": tasa_aprobacion
+            },
+            "graficos": {
+                "por_departamento": grafico_departamentos,
+                "estatus_cursos": grafico_estatus_cursos,
+                "por_puesto": grafico_puestos,
+                "evolucion_aprendizaje": grafico_evolucion
+            }
+        }
+        
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error consultando métricas: {str(e)}")
+
 app.include_router(router)
+
+
+
+
+# 1. Obtener la lista completa de departamentos con sus puestos
+@app.get("/api/admin/estructura", tags=["Estructura Organizacional"])
+def obtener_estructura_organizacional(db: Session = Depends(get_db)):
+    deptos = db.query(models.Departamento).all()
+    resultado = []
+    for d in deptos:
+        resultado.append({
+            "id": d.id,
+            "nombre": d.nombre,
+            "descripcion": d.descripcion,
+            "puestos": [
+                {"id": p.id, "nombre": p.nombre} for p in d.puestos
+            ]
+        })
+    return resultado
+
+
+# 2. Crear un nuevo departamento 
+@app.post("/api/admin/departamentos", tags=["Estructura Organizacional"])
+def crear_departamento(datos: DepartamentoCreate, db: Session = Depends(get_db)):
+    nombre_limpio = datos.nombre.strip()
+    
+    depto_existente = db.query(models.Departamento).filter(
+        func.lower(models.Departamento.nombre) == nombre_limpio.lower()
+    ).first()
+    
+    if depto_existente:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, 
+            detail=f"El departamento '{nombre_limpio}' ya existe."
+        )
+        
+    nuevo_depto = models.Departamento(
+        nombre=nombre_limpio,
+        descripcion=datos.descripcion.strip() if datos.descripcion else None
+    )
+    db.add(nuevo_depto)
+    db.commit()
+    db.refresh(nuevo_depto)
+    
+    if datos.puestos:
+        for p_nombre in datos.puestos:
+            if p_nombre.strip():
+                puesto_obj = models.Puesto(
+                    nombre=p_nombre.strip(),
+                    departamento_id=nuevo_depto.id
+                )
+                db.add(puesto_obj)
+        db.commit()
+        
+    return {
+        "mensaje": "Departamento creado exitosamente", 
+        "id": nuevo_depto.id, 
+        "nombre": nuevo_depto.nombre
+    }
+
+
+@app.post("/api/admin/departamentos/{depto_id}/puestos", tags=["Estructura Organizacional"])
+def agregar_puesto_a_departamento(depto_id: int, datos: PuestoCreate, db: Session = Depends(get_db)):
+    depto = db.query(models.Departamento).filter(models.Departamento.id == depto_id).first()
+    if not depto:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, 
+            detail="El departamento especificado no existe."
+        )
+        
+    puesto_nombre = datos.nombre.strip()
+    
+    puesto_existente = db.query(models.Puesto).filter(
+        models.Puesto.departamento_id == depto_id,
+        func.lower(models.Puesto.nombre) == puesto_nombre.lower()
+    ).first()
+    
+    if puesto_existente:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, 
+            detail=f"El puesto '{puesto_nombre}' ya existe en el departamento '{depto.nombre}'."
+        )
+        
+    nuevo_puesto = models.Puesto(
+        nombre=puesto_nombre,
+        departamento_id=depto.id
+    )
+    db.add(nuevo_puesto)
+    db.commit()
+    db.refresh(nuevo_puesto)
+    
+    return {
+        "mensaje": f"Puesto '{nuevo_puesto.nombre}' agregado exitosamente a '{depto.nombre}'",
+        "id": nuevo_puesto.id
+    }
+
+@app.put("/api/cursos/{curso_id}")
+def actualizar_curso(curso_id: int, curso: CursoCreate, db: Session = Depends(get_db)):
+    db_curso = db.query(Curso).filter(Curso.id == curso_id).first()
+    
+    if not db_curso:
+        raise HTTPException(status_code=404, detail="Curso no encontrado")
+    
+    datos_actualizados = curso.model_dump() 
+    for clave, valor in datos_actualizados.items():
+        setattr(db_curso, clave, valor)
+        
+    db.commit()
+    db.refresh(db_curso)
+    return db_curso

@@ -3,6 +3,7 @@ from sqlalchemy import Column, Integer, String, Float, ForeignKey, DateTime, Dat
 from sqlalchemy.orm import relationship
 from database import Base
 
+
 # ==========================================
 # ESTRUCTURA ORGANIZACIONAL (RRHH)
 # ==========================================
@@ -25,7 +26,6 @@ class Puesto(Base):
     departamento_id = Column(Integer, ForeignKey("departamentos.id"), nullable=False)
 
     departamento = relationship("Departamento", back_populates="puestos")
-    #usuarios = relationship("Usuario", back_populates="puesto_rel")
 
 
 # ==========================================
@@ -39,14 +39,9 @@ class Usuario(Base):
     nombre = Column(String(150), nullable=False)
     email = Column(String(150), unique=True, index=True, nullable=False)
     password = Column(String(255), nullable=False)
-    rol = Column(String(50), default="empleado") # 'empleado', 'rh', 'admin'
-    departamento = Column(String(100), nullable=True) # Mantener para compatibilidad
-    puesto = Column(String(100), nullable=True)       # Mantener para compatibilidad
-    
-    #puesto_id = Column(Integer, ForeignKey("puestos.id"), nullable=True)
-
-    # Relaciones
-    #puesto_rel = relationship("Puesto", back_populates="usuarios")
+    rol = Column(String(50), default="empleado") 
+    departamento = Column(String(100), nullable=True) 
+    puesto = Column(String(100), nullable=True)       
     diagnosticos = relationship("Diagnostico", back_populates="usuario")
     rutas = relationship("RutaAprendizaje", back_populates="usuario")
     progresos = relationship("ProgresoCurso", back_populates="usuario")
@@ -60,12 +55,11 @@ class Pregunta(Base):
     __tablename__ = "preguntas"
 
     id = Column(Integer, primary_key=True, index=True)
-    puesto_id = Column(String(50), index=True, nullable=False) 
-    texto = Column(Text, nullable=False)
-    opcion_1 = Column(String(255), nullable=False)
-    opcion_2 = Column(String(255), nullable=False)
-    opcion_3 = Column(String(255), nullable=False)
-    opcion_4 = Column(String(255), nullable=False)
+    puesto = Column(String, nullable=False)           
+    texto = Column(String, nullable=False)           
+    opciones = Column(JSON, nullable=False)          
+    opcion_correcta = Column(Integer, nullable=False)
+    categoria = Column(String, nullable=True)        
 
 
 class Diagnostico(Base):
@@ -101,12 +95,12 @@ class Curso(Base):
     id = Column(Integer, primary_key=True, index=True)
     titulo = Column(String(200), nullable=False)
     descripcion = Column(Text, nullable=True)
-    duracion = Column(String(50), nullable=False)    # Ej: "45 min" o "2 horas"
-    nivel = Column(String(50), nullable=False)       # 'Básico', 'Intermedio', 'Avanzado'
+    duracion = Column(String(50), nullable=False)   
+    nivel = Column(String(50), nullable=False)       
     categoria = Column(String(100), nullable=False) 
     puesto_id = Column(String(50), index=True, nullable=False) 
-    url_contenido = Column(String(500), nullable=True) # Enlace al video/recurso
-    tipo_contenido = Column(String(50), default="VIDEO") # 'VIDEO', 'DOCUMENTO', 'SCORM'
+    url_contenido = Column(String(500), nullable=True) 
+    tipo_contenido = Column(String(50), default="VIDEO") 
 
 
 class ProgresoCurso(Base):
@@ -115,7 +109,7 @@ class ProgresoCurso(Base):
     id_progreso = Column(Integer, primary_key=True, index=True)
     id_usuario = Column(Integer, ForeignKey("usuarios.id"), nullable=False)
     id_curso = Column(Integer, ForeignKey("cursos.id"), nullable=False)
-    estatus = Column(String(50), default="Pendiente")  # 'Pendiente', 'En progreso', 'Completado'
+    estatus = Column(String(50), default="Pendiente")  
     calificacion = Column(Float, nullable=True)
     fecha_inicio = Column(DateTime, default=datetime.utcnow)
     fecha_completado = Column(DateTime, nullable=True)
@@ -132,9 +126,9 @@ class XAPIStatement(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     usuario_id = Column(Integer, ForeignKey("usuarios.id"), nullable=False)
-    verb = Column(String(100), nullable=False)  # ej: 'initialized', 'completed', 'passed'
-    object_id = Column(String(255), nullable=False) # URI o ID del curso/recurso
-    statement_json = Column(JSON, nullable=False)  # Enunciado xAPI completo
+    verb = Column(String(100), nullable=False)  
+    object_id = Column(String(255), nullable=False) 
+    statement_json = Column(JSON, nullable=False) 
     timestamp = Column(DateTime, default=datetime.utcnow)
 
     usuario = relationship("Usuario")
