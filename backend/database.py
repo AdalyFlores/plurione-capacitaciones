@@ -1,8 +1,11 @@
+import os
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 
-DATABASE_URL = "postgresql://postgres:admin01@localhost:5433/capacitacion_db"
+# Intenta leer la conexión desde el archivo .env; si no existe, usa tu configuración local con el puerto 5433
+DEFAULT_DB_URL = "postgresql://postgres:admin01@localhost:5433/capacitacion_db"
+DATABASE_URL = os.getenv("DATABASE_URL", DEFAULT_DB_URL)
 
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

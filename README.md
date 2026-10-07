@@ -16,7 +16,7 @@ Es una plataforma web para el proceso de capacitación del personal de nuevo ing
 
 ## Base de datos
 
-1. Crea una base vacía llamada `plurione_db`.
+1. Crea una base vacía llamada `capacitacion_db`.
 2. Para cargar la estructura y datos de prueba, ejecuta desde la carpeta `backend/`:
 
 ```bash
